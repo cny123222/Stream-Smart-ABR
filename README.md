@@ -1,2 +1,2 @@
-# Stream-Smart-ABR
-TCP-based streaming video system with adaptive bitrate (ABR) optimization. Course project for SJTU-CS3611 Computer Networking.
+## Github项目协作教程见 github_tutorial.md
+## 代码修改不要推送 `main` 分支
