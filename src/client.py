@@ -2,44 +2,76 @@ import socket
 import os
 import subprocess
 import time
+import logging # Added for better client-side logging
 
 # --- Configuration ---
 SERVER_HOST = '127.0.0.1'  # Server's IP address
 SERVER_PORT = 8080
 DOWNLOAD_DIR = "download"  # Temporary storage for segments
-PLAYER_PATH = "ffplay"     # Path to ffplay or vlc (e.g., "vlc --play-and-exit") 
-                           # On Windows, ffplay might be 'ffplay.exe'
-                           # Ensure ffplay is in your PATH or provide the full path.
-                           # ffplay arguments for auto-exit: -autoexit -nodisp (for no display if testing)
-                           # For actual playing: ffplay -autoexit <file>
-BUFFER_SIZE = 4096
+PLAYER_PATH = "ffplay"     # Path to ffplay or vlc. Examples:
+                           # "ffplay" (if in PATH)
+                           # "/usr/bin/ffplay" (Linux)
+                           # "/Applications/VLC.app/Contents/MacOS/VLC" --play-and-exit (macOS VLC example)
+                           # "C:\\path\\to\\vlc\\vlc.exe" --play-and-exit (Windows VLC example)
+BUFFER_SIZE = 4096 # For receiving file chunks
+
+# --- Logger Setup ---
+# Basic client-side logging
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()]) # Log to console
+logger = logging.getLogger('StreamingClient')
+
 
 def play_segment(segment_path):
     """Calls an external player to play the segment."""
     if not os.path.exists(segment_path):
-        print(f"Error: Segment {segment_path} not found for playing.")
-        return
+        logger.error(f"Segment {segment_path} not found for playing.")
+        return False # Indicate failure
     
-    print(f"Playing segment: {segment_path}...")
+    logger.info(f"Attempting to play segment: {segment_path}...")
     try:
-        # For ffplay, -autoexit makes it close after playing.
-        # You can add -nodisp if you don't want the video window during testing.
-        if PLAYER_PATH.startswith("ffplay"):
-            cmd = [PLAYER_PATH, '-autoexit', '-loglevel', 'quiet', segment_path]
-        elif PLAYER_PATH.startswith("vlc"): # Example for VLC
-             cmd = [PLAYER_PATH, '--play-and-exit', segment_path]
+        if "ffplay" in PLAYER_PATH.lower():
+            # -autoexit: ffplay closes when playback finishes
+            # -nodisp: (optional) disable video display, useful for testing without GUI
+            # -loglevel quiet: suppress ffplay's own console output unless error
+            cmd = [PLAYER_PATH, '-autoexit', '-loglevel', 'error', segment_path]
+        elif "vlc" in PLAYER_PATH.lower():
+             cmd = [PLAYER_PATH, '--play-and-exit', segment_path] # VLC specific
+        else: # Generic attempt, might not auto-exit or be quiet
+            cmd = [PLAYER_PATH, segment_path]
+
+        process = subprocess.Popen(cmd) # Use Popen for non-blocking if needed, or run for blocking
+        process.wait() # Wait for the player to finish
+        
+        if process.returncode == 0:
+            logger.info(f"Finished playing {segment_path} successfully.")
+            return True
         else:
-            cmd = [PLAYER_PATH, segment_path] # Generic, might not auto-exit
+            logger.error(f"Player for {segment_path} exited with code {process.returncode}.")
+            return False
 
-        subprocess.run(cmd, check=True)
-        print(f"Finished playing {segment_path}.")
-    except subprocess.CalledProcessError as e:
-        print(f"Player error for {segment_path}: {e}")
+    except subprocess.CalledProcessError as e: # .run(check=True) raises this
+        logger.error(f"Player error for {segment_path}: {e}")
     except FileNotFoundError:
-        print(f"Error: Player '{PLAYER_PATH}' not found. Please install it or check the path.")
-        print("Exiting. Please configure PLAYER_PATH correctly.")
-        exit(1) # Exit if player is not found, as it's critical.
+        logger.error(f"Player executable '{PLAYER_PATH}' not found. Please install it or check PLAYER_PATH.")
+        logger.error("Exiting due to player misconfiguration.")
+        exit(1) # Critical error, exit
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during playback of {segment_path}: {e}")
+    return False # Indicate failure
 
+
+def receive_exact_bytes(sock, num_bytes):
+    """Receives exactly num_bytes from the socket."""
+    data = b''
+    while len(data) < num_bytes:
+        remaining_bytes = num_bytes - len(data)
+        chunk = sock.recv(min(BUFFER_SIZE, remaining_bytes))
+        if not chunk:
+            raise ConnectionError("Socket connection broken while receiving data.")
+        data += chunk
+    return data
 
 def start_streaming_session(client_socket, video_name, quality_suffix):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -47,134 +79,119 @@ def start_streaming_session(client_socket, video_name, quality_suffix):
 
     while True:
         # Construct segment name based on convention from segment_video.py
-        # e.g., your_long_video-1080p-8000k-000.ts
+        # e.g., bbb_sunflower_1080p_30fps_normal-1080p-8000k-000.ts
         segment_filename_on_server = f"{video_name}-{quality_suffix}-{segment_index:03d}.ts"
         # Client requests path relative to server's BASE_SEGMENTS_DIR
+        # e.g., "bbb_sunflower_1080p_30fps_normal/1080p-8000k/bbb_sunflower_1080p_30fps_normal-1080p-8000k-000.ts"
         request_path_on_server = f"{video_name}/{quality_suffix}/{segment_filename_on_server}"
         
-        print(f"Requesting segment: {request_path_on_server}")
-        client_socket.sendall(f"GET {request_path_on_server}\n".encode('utf-8'))
+        logger.info(f"Requesting segment: {request_path_on_server}")
+        request_message = f"GET {request_path_on_server}\n"
+        try:
+            client_socket.sendall(request_message.encode('utf-8'))
 
-        response = client_socket.recv(1024).decode('utf-8').strip()
-
-        if response == "OK":
-            local_segment_path = os.path.join(DOWNLOAD_DIR, f"temp_segment_{segment_index:03d}.ts")
-            print(f"Receiving segment data into {local_segment_path}...")
+            # Receive the header line (e.g., "OK 12345\n" or "ERROR ...\n")
+            # Read up to a reasonable header size, look for newline
+            header_data = b""
+            while not header_data.endswith(b"\n"):
+                byte = client_socket.recv(1)
+                if not byte:
+                    raise ConnectionError("Connection closed by server while waiting for header.")
+                header_data += byte
             
-            try:
-                with open(local_segment_path, 'wb') as f:
-                    while True: # This loop needs a way to know when the file ends
-                                # This simple implementation relies on server closing connection
-                                # or sending a specific "end of file" marker if we enhance protocol.
-                                # For now, if chunk is small, it might mean end of file if server sends in one go
-                                # OR we can read until server stops sending or an explicit EOF marker.
-                                # A common way is to get file size first. Let's assume for now small files or
-                                # just keep reading until recv returns 0 bytes (which means server closed this segment stream)
-                                # THIS PART IS CRITICAL AND NEEDS ROBUSTNESS for partial sends.
-                                # A better way: server sends file size, client reads that many bytes.
-                                # For now, trying to read until socket seems to deliver no more (can be tricky)
-                                
-                                # Let's refine this to read in chunks until no more data for this segment
-                                # The server sends "OK\n" then the raw file data.
-                                # The client needs to know when the file data ends.
-                                # One simple approach is to try to read a large chunk. If it's less than
-                                # buffer, assume it's the last. This is not robust.
-                                # The server current implementation just sends all bytes and that's it.
-                                # The client needs to handle this.
-                                # A simple way for now: server sends all data for one file, then waits for next GET.
-                                # Client reads until it can't for a short timeout or specific amount.
-                                # For now, a fixed-size buffer read will be used, but this is an area for improvement.
-                                # (e.g., server sends file size first)
+            header_str = header_data.decode('utf-8').strip()
+            logger.info(f"Server response header: {header_str}")
 
-                                data_received_this_segment = 0
-                                while True: # Loop to receive one segment
-                                    # This blocking recv will wait for data.
-                                    # If server sends file and then stops (waiting for next GET),
-                                    # this recv will eventually timeout or return 0 if connection closes.
-                                    # This is a simplified receive loop.
-                                    try:
-                                        # Set a timeout to avoid blocking indefinitely if server doesn't send EOT
-                                        client_socket.settimeout(2.0) # 2 seconds timeout for chunk
-                                        chunk = client_socket.recv(BUFFER_SIZE)
-                                        client_socket.settimeout(None) # Reset timeout
-                                    except socket.timeout:
-                                        # print("Socket timeout waiting for chunk, assuming end of segment.")
-                                        break # Assume end of segment if timeout
-                                    
-                                    if not chunk:
-                                        # print("No more data for this segment (or connection closed).")
-                                        break # No more data for this segment or server closed
-                                    f.write(chunk)
-                                    data_received_this_segment += len(chunk)
-                                    # A more robust way: server sends expected size, client reads until size met.
-                                    # Or server sends an explicit "END_OF_SEGMENT" message.
-                                    # For basic: if chunk < BUFFER_SIZE, assume it's the last chunk. This is NOT robust.
-                                    # The current server sends all data then waits. The client will read until recv is empty.
-                                    # The break conditions (timeout, no chunk) should handle this.
-                                
-                                if data_received_this_segment > 0:
-                                    print(f"Received {data_received_this_segment} bytes for segment {segment_index}.")
-                                    play_segment(local_segment_path)
-                                else:
-                                    print(f"No data received for segment {segment_index}. Stopping.")
-                                    os.remove(local_segment_path) # Clean up empty file
-                                    return # Stop if no data received
+            if header_str.startswith("OK "):
+                try:
+                    parts = header_str.split(" ", 1)
+                    expected_size = int(parts[1])
+                except (IndexError, ValueError) as e:
+                    logger.error(f"Invalid OK response format from server: {header_str} - Error: {e}")
+                    break # Stop trying to stream
 
-                                # Clean up segment after playing
-                                if os.path.exists(local_segment_path):
-                                    print(f"Cleaning up {local_segment_path}")
-                                    os.remove(local_segment_path)
-                                
-                                segment_index += 1
+                local_segment_filename = f"temp_{video_name}_{quality_suffix}_{segment_index:03d}.ts"
+                local_segment_path = os.path.join(DOWNLOAD_DIR, local_segment_filename)
+                
+                logger.info(f"Receiving segment data ({expected_size} bytes) into {local_segment_path}...")
+                
+                try:
+                    segment_data = receive_exact_bytes(client_socket, expected_size)
+                    with open(local_segment_path, 'wb') as f:
+                        f.write(segment_data)
+                    
+                    logger.info(f"Received {len(segment_data)} bytes for segment {segment_index}.")
 
-            except Exception as e:
-                print(f"Error during segment reception or playback: {e}")
-                if os.path.exists(local_segment_path): # Clean up if error
-                    os.remove(local_segment_path)
-                break # Exit loop on error
+                    if len(segment_data) == expected_size:
+                        play_segment(local_segment_path)
+                    else:
+                        logger.error(f"File size mismatch for {local_segment_path}. Expected {expected_size}, got {len(segment_data)}.")
+                
+                finally: # Ensure cleanup even if play_segment fails or other errors
+                    if os.path.exists(local_segment_path):
+                        logger.info(f"Cleaning up {local_segment_path}")
+                        try:
+                            os.remove(local_segment_path)
+                        except OSError as e:
+                            logger.error(f"Error deleting segment {local_segment_path}: {e}")
+                
+                segment_index += 1
 
-        elif response.startswith("ERROR File not found"):
-            print(f"Segment {request_path_on_server} not found on server. End of video or error.")
+            elif header_str.startswith("ERROR 404"):
+                logger.warning(f"Segment {request_path_on_server} not found on server (404). End of video or invalid request.")
+                break # Stop trying to stream
+            elif header_str.startswith("ERROR"):
+                logger.error(f"Server returned an error: {header_str}. Stopping stream.")
+                break # Stop trying to stream
+            else:
+                logger.error(f"Unknown server response: {header_str}. Stopping stream.")
+                break # Stop trying to stream
+        
+        except ConnectionError as e:
+            logger.error(f"Connection error: {e}. Stopping stream.")
             break
-        elif response.startswith("ERROR"):
-            print(f"Server error: {response}")
-            break
-        else:
-            print(f"Unknown server response: {response}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred in streaming loop: {e}")
             break
         
         time.sleep(0.1) # Small delay before requesting next segment
 
-    print("Streaming session finished.")
+    logger.info("Streaming session finished.")
 
 def main():
     # --- Configuration for Client ---
-    # For the basic version, let's assume we know the video name and one quality.
-    # In a more advanced version, client might first ask server for available videos/qualities.
-    VIDEO_TO_STREAM = "your_long_video" # Should match the name used in segmentation
-    QUALITY_TO_STREAM = "1080p-8000k"   # Should match one of the segmented qualities
+    # Update VIDEO_TO_STREAM to match the folder name on the server (derived from original video filename)
+    VIDEO_TO_STREAM = "bbb_sunflower_1080p_30fps_normal" 
+    QUALITY_TO_STREAM = "1080p-8000k"   # Choose one of the available qualities
 
+    client_socket = None # Initialize to None
     try:
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        print(f"Connecting to server {SERVER_HOST}:{SERVER_PORT}...")
+        logger.info(f"Connecting to server {SERVER_HOST}:{SERVER_PORT}...")
         client_socket.connect((SERVER_HOST, SERVER_PORT))
-        print("Connected to server.")
+        logger.info("Connected to server.")
 
         start_streaming_session(client_socket, VIDEO_TO_STREAM, QUALITY_TO_STREAM)
 
+    except socket.timeout:
+        logger.error(f"Connection to server {SERVER_HOST}:{SERVER_PORT} timed out.")
     except ConnectionRefusedError:
-        print(f"Connection refused. Is the server running at {SERVER_HOST}:{SERVER_PORT}?")
+        logger.error(f"Connection refused. Is the server running at {SERVER_HOST}:{SERVER_PORT}?")
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred in main: {e}")
     finally:
-        if 'client_socket' in locals() and client_socket:
-            print("Sending QUIT to server.")
+        if client_socket:
+            logger.info("Sending QUIT to server (if possible) and closing connection.")
             try:
+                # Try to send QUIT, but don't fail hard if socket is already broken
                 client_socket.sendall(b"QUIT\n")
-            except: # Ignore errors if socket already closed
-                pass
-            client_socket.close()
-            print("Connection closed.")
+            except OSError: # Catch errors like "socket is already closed" or "broken pipe"
+                logger.warning("Could not send QUIT command; socket may already be closed.")
+            except Exception as e_quit:
+                logger.warning(f"Error sending QUIT command: {e_quit}")
+            finally:
+                client_socket.close()
+                logger.info("Client socket closed.")
 
 if __name__ == "__main__":
     main()
