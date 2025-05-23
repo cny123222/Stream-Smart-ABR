@@ -1,4 +1,0 @@
-- Big Buck Bunny (大雄兔)是一个非常经典的测试动画片
-- 资源来自 Blender Foundation 的开放电影
-- 我们使用的是 1080p_30fps 的版本作为高质量母片
-- [点击此处下载](https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip)
