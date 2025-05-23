@@ -6,7 +6,7 @@
 - 资源来自 Blender Foundation 的开放电影
 - 我们使用的是 **1080p_30fps** 的版本作为高质量母片，大小约 **276.1MB**
 - [点击此处下载](https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip)
-- 下载后，视频文件放在项目的根文件夹下，并重命名为 `bb_sunflower.mp4`
+- 下载后，视频文件放在项目的根文件夹下，并重命名为 `bbb_sunflower.mp4`
 
 ## 测试视频分片及转码
 
