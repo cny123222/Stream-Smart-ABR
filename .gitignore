@@ -179,3 +179,9 @@ bbb_sunflower.mp4
 
 # video segements
 video_segments/
+
+# server log
+transmission_log.txt
+
+# download segments
+download/

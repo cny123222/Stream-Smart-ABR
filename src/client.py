@@ -8,11 +8,11 @@ import logging # Added for better client-side logging
 SERVER_HOST = '127.0.0.1'  # Server's IP address
 SERVER_PORT = 8080
 DOWNLOAD_DIR = "download"  # Temporary storage for segments
-PLAYER_PATH = "ffplay"     # Path to ffplay or vlc. Examples:
-                           # "ffplay" (if in PATH)
-                           # "/usr/bin/ffplay" (Linux)
-                           # "/Applications/VLC.app/Contents/MacOS/VLC" --play-and-exit (macOS VLC example)
-                           # "C:\\path\\to\\vlc\\vlc.exe" --play-and-exit (Windows VLC example)
+PLAYER_PATH = "/Applications/VLC.app/Contents/MacOS/VLC"    # Path to ffplay or vlc. Examples:
+                                    # "ffplay" (if in PATH)
+                                    # "/usr/bin/ffplay" (Linux)
+                                    # "/Applications/VLC.app/Contents/MacOS/VLC" --play-and-exit (macOS VLC example)
+                                    # "C:\\path\\to\\vlc\\vlc.exe" --play-and-exit (Windows VLC example)
 BUFFER_SIZE = 4096 # For receiving file chunks
 
 # --- Logger Setup ---
@@ -161,8 +161,8 @@ def start_streaming_session(client_socket, video_name, quality_suffix):
 def main():
     # --- Configuration for Client ---
     # Update VIDEO_TO_STREAM to match the folder name on the server (derived from original video filename)
-    VIDEO_TO_STREAM = "bbb_sunflower_1080p_30fps_normal" 
-    QUALITY_TO_STREAM = "1080p-8000k"   # Choose one of the available qualities
+    VIDEO_TO_STREAM = "bbb_sunflower" 
+    QUALITY_TO_STREAM = "480p-1500k"   # Choose one of the available qualities
 
     client_socket = None # Initialize to None
     try:

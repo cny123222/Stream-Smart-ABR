@@ -39,9 +39,10 @@ logger.addHandler(ch)
 # Adapter to add client_ip to log records if available
 class ClientIPLogAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
-        if 'client_ip' not in self.extra:
-            self.extra['client_ip'] = "SERVER" # Default for server-side logs not tied to a client
-        return '[%s] %s' % (self.extra['client_ip'], msg), kwargs
+        if 'extra' not in kwargs:
+            kwargs['extra'] = {}
+        kwargs['extra'].update(self.extra)
+        return msg, kwargs
 
 def get_bitrate_from_filename(filename):
     """Extracts bitrate like '8000k' from 'video_name-1080p-8000k-000.ts'"""
