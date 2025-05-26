@@ -6,7 +6,7 @@ import logging
 
 # --- Configuration ---
 HOST = '0.0.0.0'  # Listen on all available network interfaces
-PORT = 8080
+PORT = 8081
 # Make sure this points to the directory structure like:
 # BASE_SEGMENTS_DIR/
 # └── your_video_name/

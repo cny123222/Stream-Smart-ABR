@@ -6,9 +6,9 @@ import logging # Added for better client-side logging
 
 # --- Configuration ---
 SERVER_HOST = '127.0.0.1'  # Server's IP address
-SERVER_PORT = 8080
+SERVER_PORT = 8081
 DOWNLOAD_DIR = "download"  # Temporary storage for segments
-PLAYER_PATH = "/Applications/VLC.app/Contents/MacOS/VLC"    # Path to ffplay or vlc. Examples:
+PLAYER_PATH = "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe"    # Path to ffplay or vlc. Examples:
                                     # "ffplay" (if in PATH)
                                     # "/usr/bin/ffplay" (Linux)
                                     # "/Applications/VLC.app/Contents/MacOS/VLC" --play-and-exit (macOS VLC example)

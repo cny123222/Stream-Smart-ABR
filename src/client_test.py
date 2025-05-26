@@ -7,7 +7,7 @@ import threading # 用于在单独线程中处理播放器事件，避免阻塞�
 
 # --- Configuration ---
 SERVER_HOST = '127.0.0.1'
-SERVER_PORT = 8080
+SERVER_PORT = 8081
 DOWNLOAD_DIR = "download"
 BUFFER_SIZE = 4096
 
