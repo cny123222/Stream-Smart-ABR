@@ -1,1 +1,1 @@
-python-vlc
+python-vl
