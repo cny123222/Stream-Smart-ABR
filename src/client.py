@@ -5,7 +5,7 @@ import logging
 import vlc 
 import threading
 from urllib.parse import unquote, urlparse # 用于解码MRL中的路径
-
+import AES
 # --- Configuration ---
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 8081 # 确保与服务器端口一致
@@ -380,9 +380,12 @@ def download_segments_task(client_socket_ref, video_name, quality_suffix):
                     logger.error(f"[DL_Thread] 分片 {segment_idx_to_download} 的OK响应格式无效: {header_str}"); continue
                 
                 segment_data = receive_exact_bytes(client_socket_ref, expected_size)
+                len_segment_data_encrypt = len(segment_data)
+                segment_data = AES.aes_decrypt_cbc(segment_data, AES.AES_KEY) # 解密分片数据
+                logger.info(f"[DL_Thread] 正在写入解密数据到本地分片文件: {local_segment_path}，明文长度: {len(segment_data)} 字节")
                 with open(local_segment_path, 'wb') as f: f.write(segment_data)
                 
-                if len(segment_data) == expected_size:
+                if len_segment_data_encrypt == expected_size:
                     # 在加入播放列表前，就在map中标记为已下载
                     with lock:
                          downloaded_segments_info[segment_idx_to_download] = {
