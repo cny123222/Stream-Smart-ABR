@@ -36,9 +36,11 @@ all_segments_processed_by_downloader = threading.Event() # 下载线程是否处
 player_signaled_true_end = threading.Event() # 播放器是否真正播放到所有内容的末尾或出错
 
 download_thread_instance = None 
+download_times = [] # 用于存储最近的下载时间，以便动态调整缓冲区大小
 # 存储已下载分片的信息: {original_segment_idx: {'path': local_abs_path, 'mrl': mrl_str, 'downloaded': bool, 'added_to_playlist': bool}}
 downloaded_segments_info = {} 
 lock = threading.Lock() # 用于保护 downloaded_segments_info 的并发访问
+buffer_condition = threading.Condition(lock) # 用于下载线程和主线程之间的同步
 
 # 从服务器获取的元数据
 total_segments_from_server = 0
@@ -145,6 +147,10 @@ def on_media_changed_callback(event):
                         if key in downloaded_segments_info: # 从跟踪字典中移除
                             del downloaded_segments_info[key]
                     last_cleaned_original_idx = max(keys_to_delete_from_map) # 更新最后清理的索引
+
+                # 在更新playing索引和清理旧分片后，通知下载线程
+                buffer_condition.notify_all() # 通知等待的下载线程
+                #    logger.debug(f"MediaPlayerMediaChanged: 通知下载线程当前播放分片索引 {found_idx}")
             else: 
                 logger.warning(f"无法将当前播放的MRL {new_mrl} (路径: {new_path_playing_abs}) 映射回原始分片索引。")
     else: 
@@ -167,6 +173,11 @@ def on_item_end_reached_callback(event):
            player_state in [vlc.State.Ended, vlc.State.Stopped, vlc.State.NothingSpecial]:
             logger.info("所有分片已由下载器处理完毕，且播放器指示所有媒体已结束。发送真正结束信号。")
             player_signaled_true_end.set() # 设置事件，通知主控制循环可以结束了
+    
+    # 通知下载线程检查并填充缓冲区
+    with buffer_condition:
+        buffer_condition.notify_all()
+        logger.debug("分片播放完毕，通知下载线程继续下载。")
 
 def on_player_error_callback(event):
     """当VLC播放器遇到错误时调用"""
@@ -217,6 +228,101 @@ def on_player_position_changed_callback(event):
                             f"播放器状态: {media_list_player.get_state()}")
             logger.info(progress_msg)
             on_player_position_changed_callback.last_log_time = time.time()
+        
+        # 如果播放进度接近当前分片末尾，通知下载线程加快下载
+        if pos_ratio_current_item >= 0.3:
+            with buffer_condition:
+                buffer_condition.notify_all()
+                logger.debug(f"当前分片播放进度 {pos_ratio_current_item:.2f}")
+
+def adjust_buffer_size_based_on_network(download_times):
+    """根据最近的下载时间动态调整缓冲区大小"""
+    global FETCH_AHEAD_TARGET
+
+    if not download_times or len(download_times) < 3:
+        return # 如果没有足够的数据，无法做出有意义的调整
+
+    # 计算平均下载时间和标准差
+    avg_time = sum(download_times) / len(download_times)
+    variance = sum((x - avg_time) ** 2 for x in download_times) / len(download_times)
+    std_dev = variance ** 0.5
+
+    # 基于网络状况调整缓冲区大小
+    if std_dev > avg_time * 0.5: # 如果网络波动较大，增加缓冲区
+        new_target = min(FETCH_AHEAD_TARGET + 1, 10) # 最大不超过10
+    elif avg_time < 0.5 and FETCH_AHEAD_TARGET > 3: # 如果平均下载时间很短且当前缓冲较大，减少缓冲区
+        new_target = FETCH_AHEAD_TARGET - 1
+    else:
+        new_target = FETCH_AHEAD_TARGET
+
+    if new_target != FETCH_AHEAD_TARGET:
+        logger.info(f"调整缓冲区大小: 从 {FETCH_AHEAD_TARGET} 到 {new_target} (基于下载时间: {download_times})")
+        FETCH_AHEAD_TARGET = new_target
+
+def reset_buffer_for_quality_change(new_quality_suffix, current_segment_idx):
+    """在切换质量时重置缓冲区和播放器状态"""
+    global media_list, downloaded_segments_info
+
+    logger.info(f"正在切换到新质量: {new_quality_suffix}，重置缓冲区和播放器状态。")
+      
+    with lock:
+        # 记录当前播放位置
+        current_playing_idx = currently_playing_original_idx
+        
+        # 获取当前MediaList中所有未播放的项目索引
+        items_to_remove = []
+        if current_playing_idx != -1:
+            # 找出所有索引大于当前播放索引的项目
+            for idx, info in downloaded_segments_info.items():
+                if idx > current_playing_idx and info.get('in_playlist', False):
+                    items_to_remove.append(idx)
+        
+        if items_to_remove:
+            # 创建一个映射表从MRL到原始索引，方便查找
+            mrl_to_original_idx = {}
+            for idx, info in downloaded_segments_info.items():
+                if 'mrl' in info and info['mrl']:
+                    mrl_to_original_idx[info['mrl']] = idx
+            
+            # 从MediaList中移除这些未播放的项目
+            media_list.lock()
+            try:
+                # 从最后往前遍历，避免删除时索引变化的问题
+                for i in range(media_list.count() - 1, -1, -1):
+                    media_item = media_list.item_at_index(i)
+                    if media_item:
+                        mrl = media_item.get_mrl()
+                        # 使用MRL在映射表中查找原始索引
+                        if mrl in mrl_to_original_idx and mrl_to_original_idx[mrl] in items_to_remove:
+                            logger.debug(f"从MediaList移除索引 {i}: 原始索引 {mrl_to_original_idx[mrl]}")
+                            media_list.remove_index(i)
+                            # 更新下载信息，标记为不在播放列表中
+                            original_idx = mrl_to_original_idx[mrl]
+                            if original_idx in downloaded_segments_info:
+                                downloaded_segments_info[original_idx]['in_playlist'] = False
+            except Exception as e:
+                logger.error(f"移除MediaList项目时出错: {e}")
+            finally:
+                media_list.unlock()
+            
+            logger.info(f"已从播放列表中移除{len(items_to_remove)}个旧质量的未播放分片")
+            
+            # 可能需要保存未播放分片路径以便稍后清理文件
+            for idx in items_to_remove:
+                if idx in downloaded_segments_info and 'path' in downloaded_segments_info[idx]:
+                    path = downloaded_segments_info[idx]['path']
+                    if os.path.exists(path):
+                        try:
+                            os.remove(path)
+                            logger.debug(f"删除旧质量分片文件: {path}")
+                        except OSError as e:
+                            logger.warning(f"无法删除旧质量分片文件 {path}: {e}")
+        
+        # 通知下载线程可以开始下载新质量的分片
+        with buffer_condition:
+            buffer_condition.notify_all()
+    
+    return current_segment_idx  # 返回应该从哪个索引开始下载新质量的分片
 
 
 def add_segment_to_vlc_playlist(local_segment_path, segment_idx_original):
@@ -262,6 +368,10 @@ def add_segment_to_vlc_playlist(local_segment_path, segment_idx_original):
         time.sleep(0.1) # 给VLC一点时间响应play命令
         if media_list_player.get_state() != vlc.State.Playing:
             logger.warning(f"启动播放失败。当前播放器状态: {media_list_player.get_state()}")
+        # 通知下载线程，播放器已开始播放
+        with buffer_condition:
+            logger.debug("播放器已开始播放，通知下载线程继续下载。")
+            buffer_condition.notify_all()
 
 
 def receive_exact_bytes(sock, num_bytes):
@@ -289,7 +399,7 @@ def download_segments_task(client_socket_ref, video_name, quality_suffix):
     """后台下载线程的目标函数。"""
     global total_segments_from_server, keep_streaming_and_downloading, \
            all_segments_processed_by_downloader, downloaded_segments_info, \
-           currently_playing_original_idx
+           currently_playing_original_idx, download_times
 
     logger.info("[DL_Thread] 下载线程已启动。")
     # 从原始索引0开始，直到所有分片下载完毕或收到停止信号
@@ -321,6 +431,8 @@ def download_segments_task(client_socket_ref, video_name, quality_suffix):
                                                 # 如果还没开始播，就看已下载多少个 (segment_idx_to_download 就是下一个)
 
             player_is_active = media_list_player.get_state() in [vlc.State.Playing, vlc.State.Buffering, vlc.State.Opening]
+
+            buffer_low_threshold = max(1, FETCH_AHEAD_TARGET // 2)
 
             if (player_is_active and num_segments_ahead_of_playing < FETCH_AHEAD_TARGET) or \
                (not player_is_active and segment_idx_to_download < MIN_BUFFER_TO_START_PLAY):
@@ -360,6 +472,8 @@ def download_segments_task(client_socket_ref, video_name, quality_suffix):
                 logger.error("[DL_Thread] 套接字已关闭或无效。无法下载。正在停止任务。")
                 keep_streaming_and_downloading.clear(); break
 
+            start_time = time.time() # 记录开始时间
+
             client_socket_ref.sendall(request_message.encode('utf-8'))
             header_data = b""
             client_socket_ref.settimeout(SOCKET_TIMEOUT_SECONDS) 
@@ -383,6 +497,16 @@ def download_segments_task(client_socket_ref, video_name, quality_suffix):
                 with open(local_segment_path, 'wb') as f: f.write(segment_data)
                 
                 if len(segment_data) == expected_size:
+                    # 记录下载时间
+                    download_time = time.time() - start_time
+                    download_times.append(download_time) 
+                    # 保持下载时间列表的长度
+                    if len(download_times) > 10: 
+                        download_times.pop(0) # 保持最新10次下载时间
+                    # 每5个分片打印一次平均下载时间
+                    if segment_idx_to_download % 5 == 0: 
+                        adjust_buffer_size_based_on_network(download_times)
+
                     # 在加入播放列表前，就在map中标记为已下载
                     with lock:
                          downloaded_segments_info[segment_idx_to_download] = {
@@ -496,9 +620,19 @@ def start_streaming_session_control(client_sock, video_name, quality_suffix):
             download_thread_instance.start()
             
             logger.info("下载线程已启动。主线程将监控播放状态 (按 Ctrl+C 停止)...")
+
+            with buffer_condition:
+                buffer_condition.notify_all() # 通知下载线程可以开始下载
             try:
                 # 主循环保持运行，直到播放器真正结束或出错，或者用户中断
+                last_notify_time = time.time()
                 while not player_signaled_true_end.is_set():
+                    current_time = time.time()
+                    if current_time - last_notify_time > 2:
+                        with buffer_condition:
+                            buffer_condition.notify_all()
+                            logger.debug("主控制循环定期通知下载线程继续下载。")
+                        last_notify_time = current_time
                     # 如果下载线程意外停止（例如网络错误），但播放器还在尝试播放剩余缓冲
                     if not keep_streaming_and_downloading.is_set() and \
                        media_list_player.get_state() not in [vlc.State.Playing, vlc.State.Buffering, vlc.State.Opening, vlc.State.Paused]:
