@@ -1,0 +1,33 @@
+{
+  "session_start_time": 1748439972.5539067,
+  "session_end_time": 1748440016.758983,
+  "total_segments_downloaded": 8,
+  "total_bytes_downloaded": 11382460,
+  "average_download_speed_kbps": 256463.009803936,
+  "quality_switches": [
+    {
+      "timestamp": 1748439988.0211637,
+      "from_quality": "480p-1500k",
+      "to_quality": "720p-4000k",
+      "reason": "切换: 吞吐量充足升级 (281118.9kbps > 6000.0kbps)",
+      "buffer_level": 20.0,
+      "throughput_kbps": 305826.00365258806
+    },
+    {
+      "timestamp": 1748440008.0446377,
+      "from_quality": "720p-4000k",
+      "to_quality": "1080p-8000k",
+      "reason": "切换: 吞吐量充足升级 (281118.9kbps > 12000.0kbps)",
+      "buffer_level": 5.0,
+      "throughput_kbps": 305826.00365258806
+    }
+  ],
+  "buffering_events": [],
+  "quality_time_distribution": {
+    "480p-1500k": 43.56770944595337,
+    "1080p-8000k": 0.4362783432006836
+  },
+  "startup_delay_seconds": 0.20706653594970703,
+  "total_buffering_time": 0.0,
+  "mean_opinion_score": 2.5198290366450933
+}

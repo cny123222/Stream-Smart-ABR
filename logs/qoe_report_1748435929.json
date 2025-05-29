@@ -1,0 +1,13 @@
+{
+  "session_start_time": 1748435929.0718946,
+  "session_end_time": 1748435929.1638732,
+  "total_segments_downloaded": 0,
+  "total_bytes_downloaded": 0,
+  "average_download_speed_kbps": 0.0,
+  "quality_switches": [],
+  "buffering_events": [],
+  "quality_time_distribution": {},
+  "startup_delay_seconds": 0.0,
+  "total_buffering_time": 0.0,
+  "mean_opinion_score": 1.0
+}

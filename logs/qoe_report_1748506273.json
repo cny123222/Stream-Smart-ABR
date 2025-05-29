@@ -1,0 +1,15 @@
+{
+  "session_start_time": 1748506261.4394438,
+  "session_end_time": 1748506273.2424572,
+  "total_segments_downloaded": 8,
+  "total_bytes_downloaded": 9803072,
+  "average_download_speed_kbps": 349896.76521216787,
+  "quality_switches": [],
+  "buffering_events": [],
+  "quality_time_distribution": {
+    "480p-1500k": 11.609488248825073
+  },
+  "startup_delay_seconds": 0.19497108459472656,
+  "total_buffering_time": 0.0,
+  "mean_opinion_score": 3.0
+}

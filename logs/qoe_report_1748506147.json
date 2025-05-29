@@ -1,0 +1,25 @@
+{
+  "session_start_time": 1748506123.5382478,
+  "session_end_time": 1748506147.0212564,
+  "total_segments_downloaded": 10,
+  "total_bytes_downloaded": 12543172,
+  "average_download_speed_kbps": 370782.59532445105,
+  "quality_switches": [
+    {
+      "timestamp": 1748506138.761018,
+      "from_quality": "480p-1500k",
+      "to_quality": "720p-4000k",
+      "reason": "切换: 吞吐量充足升级 (398035.1kbps > 6000.0kbps)",
+      "buffer_level": 30.0,
+      "throughput_kbps": 450674.41136428446
+    }
+  ],
+  "buffering_events": [],
+  "quality_time_distribution": {
+    "480p-1500k": 19.669370889663696,
+    "720p-4000k": 3.6117687225341797
+  },
+  "startup_delay_seconds": 0.2038710117340088,
+  "total_buffering_time": 0.0,
+  "mean_opinion_score": 2.6551371102401635
+}
