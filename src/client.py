@@ -1,190 +1,318 @@
 import os
 import time
 import logging
-import vlc
 import threading
 import requests # For HTTP requests
-import tempfile # For temporary M3U8 file
-from urllib.parse import urlparse, urljoin, quote, unquote # For URL manipulation
-import urllib.parse # For parsing query parameters
+import tempfile # For temporary M3U8 file (less used now)
+from urllib.parse import urlparse, urljoin, quote, unquote, parse_qs # For URL manipulation
 import http.server
 import socketserver
 import re
+import webbrowser # To open the browser
 
-import AES
+import AES # Your AES decryption module
 
 # --- Configuration ---
 SERVER_HOST = '127.0.0.1' # Your HLS server host
 SERVER_PORT = 8081        # Your HLS server port
 LOCAL_PROXY_HOST = '127.0.0.1'
-LOCAL_PROXY_PORT = 8082   # Port for the local decryption proxy
-DOWNLOAD_DIR = "download" # Directory for storing temp modified m3u8
+LOCAL_PROXY_PORT = 8082   # Port for the local proxy server
+DOWNLOAD_DIR = "download" # Directory for any temp files if needed
 SOCKET_TIMEOUT_SECONDS = 10
 
-VIDEO_TO_STREAM_NAME = "bbb_sunflower" # Just the video name, master.m3u8 will be appended
+VIDEO_TO_STREAM_NAME = "bbb_sunflower" # Base name for the video stream
 
 # --- Logger Setup ---
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
                     handlers=[logging.StreamHandler()])
-logger = logging.getLogger('HLSClientVLC')
+logger = logging.getLogger('HLSJS_Client')
 
-# --- VLC Player Setup & State ---
-vlc_instance = None
-media_player = None
-player_event_manager = None
-player_reached_end = threading.Event()
-
-# --- Local Decryption Proxy ---
+# --- Local Proxy Server Globals ---
 g_local_proxy_server_instance = None
 g_proxy_runner_thread = None
 
-# --- ABR State (Shared between ABR logic and Proxy if needed) ---
+# --- ABR State (Shared between ABR logic and Proxy for stats) ---
 abr_lock = threading.Lock()
-current_selected_media_m3u8_url_on_server = None # Full URL on the original server for the current quality
-current_segment_urls_relative_to_media_m3u8 = [] # List of relative segment URLs for the current media m3u8
+# This now primarily reflects the ABR *algorithm's* chosen quality, HLS.js makes its own choices.
+current_abr_algorithm_selected_media_m3u8_url_on_server = None
 
-# DecryptionProxyHandler and ThreadingLocalProxyServer classes remain the same as your last provided version
-# _run_proxy_server_target, start_proxy_server, stop_proxy_server remain the same
+# --- HTML Content for the Player ---
+HTML_PLAYER_CONTENT = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HLS.js Player</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }}
+        #videoContainer {{ width: 80%; max-width: 800px; margin: 0 auto; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
+        video {{ width: 100%; background-color: #000; }}
+        h1 {{ text-align: center; color: #555; }}
+        .controls {{ text-align: center; margin-top: 10px; }}
+        button {{ padding: 8px 15px; margin: 5px; cursor: pointer; }}
+    </style>
+</head>
+<body>
+    <h1>HLS.js Streaming Client</h1>
+    <div id="videoContainer">
+        <video id="videoPlayer" controls></video>
+    </div>
+    <div class="controls">
+        <p>Master Playlist URL: <span id="masterUrlSpan"></span></p>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const video = document.getElementById('videoPlayer');
+            const masterM3u8Url = `http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8`;
+            document.getElementById('masterUrlSpan').textContent = masterM3u8Url;
+            
+            if (Hls.isSupported()) {
+                const hls = new Hls({
+                    // debug: true, // Enable for more detailed HLS.js logs in browser console
+                    // --- Configuration for ABR (HLS.js internal ABR) ---
+                    // capLevelToPlayerSize: true, // Match quality to player size
+                    // abrEwmaDefaultEstimate: 500000, // Initial bandwidth estimate in bits/s (optional)
+                    // abrMaxWithRealBitrate: true, // Use actual segment bitrate for ABR decisions
+                });
+                hls.loadSource(masterM3u8Url);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                    console.log("Manifest parsed, playing video.");
+                    video.play();
+                });
+                hls.on(Hls.Events.ERROR, function (event, data) {
+                    if (data.fatal) {
+                        switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                console.error('Fatal network error encountered:', data);
+                                // Try to recover from network errors
+                                // hls.startLoad(); // or hls.loadSource(masterM3u8Url);
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                console.error('Fatal media error encountered:', data);
+                                // hls.recoverMediaError(); // Attempt to recover
+                                break;
+                            default:
+                                console.error('Fatal HLS error:', data);
+                                hls.destroy(); // Cannot recover
+                                break;
+                        }
+                    } else {
+                        console.warn('Non-fatal HLS error:', data);
+                    }
+                });
+                 hls.on(Hls.Events.LEVEL_SWITCHED, function(event, data) {
+                    console.log(`HLS.js switched to level: ${data.level}, Bitrate: ${hls.levels[data.level].bitrate/1000} Kbps, Resolution: ${hls.levels[data.level].width}x${hls.levels[data.level].height}`);
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS support (e.g., Safari)
+                video.src = masterM3u8Url;
+                video.addEventListener('loadedmetadata', function () {
+                    video.play();
+                });
+            } else {
+                alert("HLS is not supported in your browser.");
+            }
+        });
+    </script>
+</body>
+</html>
+""".replace("{LOCAL_PROXY_HOST}", LOCAL_PROXY_HOST) \
+ .replace("{LOCAL_PROXY_PORT}", str(LOCAL_PROXY_PORT)) \
+ .replace("{VIDEO_TO_STREAM_NAME}", VIDEO_TO_STREAM_NAME)
+
 
 class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        log_adapter = logging.LoggerAdapter(logger, {}) 
+        log_adapter = logging.LoggerAdapter(logger, {'path': self.path})
         request_log_tag = f"[ProxyRequest URI: {self.path}]"
+        parsed_url = urlparse(self.path)
+        path_components = parsed_url.path.strip('/').split('/')
 
         try:
-            parsed_url_from_vlc = urlparse(self.path) # path is like /proxy?url=ENCODED_ORIGINAL_TS_URL
-            query_params = urllib.parse.parse_qs(parsed_url_from_vlc.query)
-            original_ts_url_on_server_encoded = query_params.get('url', [None])[0]
-
-            if not original_ts_url_on_server_encoded:
-                log_adapter.error(f"{request_log_tag} Proxy GET request missing 'url' parameter.")
-                self.send_error(400, "Bad Request: Missing 'url' parameter")
+            # 1. Serve player.html
+            if parsed_url.path == '/' or parsed_url.path == '/player.html':
+                log_adapter.info(f"{request_log_tag} Serving player.html")
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(HTML_PLAYER_CONTENT.encode('utf-8'))
                 return
-            
-            original_ts_url_on_server = unquote(original_ts_url_on_server_encoded)
-            log_adapter.info(f"{request_log_tag} VLC requested (based on its M3U8): {original_ts_url_on_server}")
 
-            # --- ABR逻辑介入，决定实际要获取的分片URL ---
-            actual_url_to_fetch_from_server = original_ts_url_on_server # 默认值
+            # 2. Serve Master M3U8 (e.g., /bbb_sunflower/master.m3u8)
+            # Assumes master playlist is always named "master.m3u8"
+            # and is at /{VIDEO_NAME}/master.m3u8
+            if len(path_components) == 2 and path_components[0] == VIDEO_TO_STREAM_NAME and path_components[1] == "master.m3u8":
+                video_name_from_url = path_components[0]
+                original_master_m3u8_url = f"http://{SERVER_HOST}:{SERVER_PORT}/{video_name_from_url}/master.m3u8"
+                log_adapter.info(f"{request_log_tag} Request for master M3U8. Fetching from: {original_master_m3u8_url}")
 
-            try:
-                # 1. 从VLC请求的URL中解析出视频名和分片序号/基本名
-                # original_ts_url_on_server 格式: http://{S_HOST}:{S_PORT}/{VID_NAME}/{ORIG_QUAL}/{VID_NAME}-{ORIG_QUAL}-{INDEX}.ts
-                path_parts = urlparse(original_ts_url_on_server).path.strip('/').split('/')
-                
-                if len(path_parts) >= 3:
-                    # path_parts[0] is video_name, path_parts[1] is original_quality_suffix
-                    # path_parts[-1] is the full segment filename
-                    requested_video_name_from_url = path_parts[0] 
-                    segment_filename_from_vlc_m3u8 = path_parts[-1]
-
-                    # 从分片文件名中提取纯粹的序号部分，例如 "00016"
-                    # 假设分片名格式为: {video_name}-{any_quality_suffix}-{index_str}.ts
-                    # 我们需要捕获 video_name 和 index_str
-                    # 例如: bbb_sunflower-480p-1500k-00016.ts -> video_name="bbb_sunflower", index="00016"
+                try:
+                    response = requests.get(original_master_m3u8_url, timeout=SOCKET_TIMEOUT_SECONDS)
+                    response.raise_for_status()
+                    master_content = response.text
+                    modified_master_content = self._rewrite_master_playlist(master_content, original_master_m3u8_url)
                     
-                    # 更通用的方式是找到最后一个'-'和'.ts'之间的部分作为序号
-                    match_index = re.search(r'-(\d+)\.ts$', segment_filename_from_vlc_m3u8)
-                    if match_index:
-                        segment_index_str = match_index.group(1) # 例如 "00016" or "16" (取决于你的 %0xd)
-                                                                # 需要确保你的 %05d 和这里的正则匹配
-                        
-                        # 2. 获取ABR当前选择的媒体M3U8 URL
-                        with abr_lock:
-                            abr_selected_media_m3u8_url = current_selected_media_m3u8_url_on_server
-                        
-                        if abr_selected_media_m3u8_url:
-                            # 3. 从ABR选择的媒体M3U8 URL中解析出新的目标质量后缀和视频名
-                            # 例如: http://127.0.0.1:8081/bbb_sunflower/720p-4000k/bbb_sunflower-720p-4000k.m3u8
-                            abr_path_parts = urlparse(abr_selected_media_m3u8_url).path.strip('/').split('/')
-                            if len(abr_path_parts) >= 3: # video_name/quality_suffix/playlist.m3u8
-                                abr_video_name = abr_path_parts[0]
-                                abr_selected_quality_suffix = abr_path_parts[1]
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/vnd.apple.mpegurl') # or 'application/x-mpegURL'
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(modified_master_content.encode('utf-8'))
+                    log_adapter.info(f"{request_log_tag} Served modified master M3U8.")
+                except requests.exceptions.RequestException as e:
+                    log_adapter.error(f"{request_log_tag} Failed to fetch/process master M3U8 {original_master_m3u8_url}: {e}")
+                    self.send_error(502, f"Bad Gateway: Could not fetch master M3U8 from origin: {e}")
+                return
 
-                                # 4. 构造新的分片文件名和完整URL
-                                # 使用从VLC请求中解析出的视频名和序号，但使用ABR选择的质量后缀
-                                new_segment_filename = f"{requested_video_name_from_url}-{abr_selected_quality_suffix}-{segment_index_str}.ts"
-                                # 如果你的序号格式是固定的（比如%05d），确保segment_index_str符合
-                                # segment_index_str_padded = segment_index_str.zfill(5) # 如果需要补零
-                                # new_segment_filename = f"{requested_video_name_from_url}-{abr_selected_quality_suffix}-{segment_index_str_padded}.ts"
-
-
-                                actual_url_to_fetch_from_server = \
-                                    f"http://{SERVER_HOST}:{SERVER_PORT}/{requested_video_name_from_url}/{abr_selected_quality_suffix}/{new_segment_filename}"
-                                
-                                if actual_url_to_fetch_from_server != original_ts_url_on_server:
-                                    log_adapter.info(f"{request_log_tag} ABR Override: Fetching '{new_segment_filename}' from quality '{abr_selected_quality_suffix}' "
-                                                     f"instead of segment from '{path_parts[1]}'. Target: {actual_url_to_fetch_from_server}")
-                                else:
-                                    log_adapter.debug(f"{request_log_tag} ABR: Sticking with current quality segment: {actual_url_to_fetch_from_server}")
-                            else:
-                                log_adapter.warning(f"{request_log_tag} Could not parse ABR selected media M3U8 URL structure: {abr_selected_media_m3u8_url}")
-                        else:
-                            log_adapter.warning(f"{request_log_tag} No ABR selected media M3U8 URL available yet (current_selected_media_m3u8_url_on_server is None). Using VLC's requested URL.")
-                    else:
-                        log_adapter.warning(f"{request_log_tag} Could not parse segment index from filename: {segment_filename_from_vlc_m3u8}. Using VLC's requested URL.")
-                else:
-                    log_adapter.warning(f"{request_log_tag} Could not parse original TS URL structure: {original_ts_url_on_server}. Using VLC's requested URL.")
-            except Exception as e_abr_url_logic:
-                log_adapter.error(f"{request_log_tag} Error in ABR URL construction logic: {e_abr_url_logic}. Defaulting to VLC's requested URL.", exc_info=True)
-                actual_url_to_fetch_from_server = original_ts_url_on_server # Fallback
-
-            # --- 从最终确定的URL获取数据 (actual_url_to_fetch_from_server) ---
-            log_adapter.info(f"{request_log_tag} Final URL to fetch from server: {actual_url_to_fetch_from_server}")
-            
-            try:
-                fetch_start_time = time.time()
-                response = requests.get(actual_url_to_fetch_from_server, timeout=SOCKET_TIMEOUT_SECONDS, stream=True)
-                # ... (后续的 response.raise_for_status(), encrypted_data = response.content, ABRManager.add_segment_download_stat 调用不变) ...
-                response.raise_for_status() 
-                encrypted_data = response.content 
-                fetch_end_time = time.time()
+            # 3. Serve Media M3U8 (e.g., /bbb_sunflower/720p-4000k/bbb_sunflower-720p-4000k.m3u8)
+            # Assumes path structure: /{VIDEO_NAME}/{QUALITY_DIR}/{PLAYLIST_NAME}.m3u8
+            if len(path_components) == 3 and path_components[0] == VIDEO_TO_STREAM_NAME and path_components[2].endswith(".m3u8"):
+                video_name_from_url = path_components[0]
+                quality_dir_from_url = path_components[1]
+                playlist_filename_from_url = path_components[2]
                 
-                if ABRManager.instance: 
-                    download_duration = fetch_end_time - fetch_start_time
-                    segment_size = len(encrypted_data)
-                    # 传递 actual_url_to_fetch_from_server 给统计，因为它反映了实际下载的码率
-                    ABRManager.instance.add_segment_download_stat(actual_url_to_fetch_from_server, segment_size, download_duration)
+                original_media_m3u8_url = f"http://{SERVER_HOST}:{SERVER_PORT}/{video_name_from_url}/{quality_dir_from_url}/{playlist_filename_from_url}"
+                log_adapter.info(f"{request_log_tag} Request for media M3U8. Fetching from: {original_media_m3u8_url}")
 
-            except requests.exceptions.RequestException as e:
-                log_adapter.error(f"{request_log_tag} Proxy failed to fetch segment {actual_url_to_fetch_from_server} from main server: {e}")
-                if ABRManager.instance: ABRManager.instance.report_download_error(actual_url_to_fetch_from_server)
-                self.send_error(502, f"Bad Gateway: Could not fetch from origin: {e}")
-                return
-            # ... (后续的解密和发送逻辑不变) ...
-            if not encrypted_data: # Check after fetch
-                log_adapter.warning(f"{request_log_tag} Proxy received empty content for {actual_url_to_fetch_from_server}")
-                if ABRManager.instance: ABRManager.instance.report_download_error(actual_url_to_fetch_from_server)
-                self.send_error(502, "Bad Gateway: Empty content from origin")
-                return
-            
-            try:
-                decrypted_data = AES.aes_decrypt_cbc(encrypted_data, AES.AES_KEY)
-            except Exception as e:
-                log_adapter.error(f"{request_log_tag} Proxy failed to decrypt segment from {actual_url_to_fetch_from_server}: {e}", exc_info=True)
-                self.send_error(500, "Internal Server Error: Decryption failed")
+                try:
+                    response = requests.get(original_media_m3u8_url, timeout=SOCKET_TIMEOUT_SECONDS)
+                    response.raise_for_status()
+                    media_content = response.text
+                    modified_media_content = self._rewrite_media_playlist(media_content, original_media_m3u8_url)
+
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/vnd.apple.mpegurl')
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(modified_media_content.encode('utf-8'))
+                    log_adapter.info(f"{request_log_tag} Served modified media M3U8 for quality {quality_dir_from_url}.")
+                except requests.exceptions.RequestException as e:
+                    log_adapter.error(f"{request_log_tag} Failed to fetch/process media M3U8 {original_media_m3u8_url}: {e}")
+                    self.send_error(502, f"Bad Gateway: Could not fetch media M3U8 from origin: {e}")
                 return
 
-            log_adapter.info(f"{request_log_tag} Successfully decrypted segment from {actual_url_to_fetch_from_server}. Decrypted size: {len(decrypted_data)} bytes.")
+            # 4. Serve Decrypted TS Segment (e.g., /decrypt_segment?url=ENCODED_ORIGINAL_TS_URL)
+            if parsed_url.path == '/decrypt_segment':
+                query_params = parse_qs(parsed_url.query)
+                original_ts_url_on_server_encoded = query_params.get('url', [None])[0]
 
-            self.send_response(200)
-            self.send_header('Content-type', 'video/MP2T')
-            self.send_header('Content-Length', str(len(decrypted_data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(decrypted_data)
-            log_adapter.debug(f"{request_log_tag} Finished sending decrypted segment for {actual_url_to_fetch_from_server} to VLC.")
+                if not original_ts_url_on_server_encoded:
+                    log_adapter.error(f"{request_log_tag} Decrypt request missing 'url' parameter.")
+                    self.send_error(400, "Bad Request: Missing 'url' parameter")
+                    return
+                
+                original_ts_url_on_server = unquote(original_ts_url_on_server_encoded)
+                log_adapter.info(f"{request_log_tag} HLS.js requested TS: {original_ts_url_on_server}")
+                
+                try:
+                    fetch_start_time = time.time()
+                    response_ts = requests.get(original_ts_url_on_server, timeout=SOCKET_TIMEOUT_SECONDS, stream=True)
+                    response_ts.raise_for_status()
+                    encrypted_data = response_ts.content
+                    fetch_end_time = time.time()
+
+                    if ABRManager.instance:
+                        download_duration = fetch_end_time - fetch_start_time
+                        segment_size = len(encrypted_data)
+                        ABRManager.instance.add_segment_download_stat(original_ts_url_on_server, segment_size, download_duration)
+
+                    if not encrypted_data:
+                        log_adapter.warning(f"{request_log_tag} Proxy received empty content for {original_ts_url_on_server}")
+                        if ABRManager.instance: ABRManager.instance.report_download_error(original_ts_url_on_server)
+                        self.send_error(502, "Bad Gateway: Empty content from origin for TS segment")
+                        return
+                    
+                    decrypted_data = AES.aes_decrypt_cbc(encrypted_data, AES.AES_KEY)
+                    log_adapter.debug(f"{request_log_tag} Successfully decrypted segment from {original_ts_url_on_server}. Decrypted size: {len(decrypted_data)} bytes.")
+
+                    self.send_response(200)
+                    self.send_header('Content-type', 'video/MP2T')
+                    self.send_header('Content-Length', str(len(decrypted_data)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(decrypted_data)
+                    log_adapter.debug(f"{request_log_tag} Finished sending decrypted segment for {original_ts_url_on_server} to HLS.js.")
+
+                except requests.exceptions.RequestException as e_req:
+                    log_adapter.error(f"{request_log_tag} Proxy failed to fetch segment {original_ts_url_on_server} from main server: {e_req}")
+                    if ABRManager.instance: ABRManager.instance.report_download_error(original_ts_url_on_server)
+                    self.send_error(502, f"Bad Gateway: Could not fetch TS from origin: {e_req}")
+                except Exception as e_dec:
+                    log_adapter.error(f"{request_log_tag} Proxy failed to decrypt segment from {original_ts_url_on_server}: {e_dec}", exc_info=True)
+                    self.send_error(500, "Internal Server Error: Decryption failed")
+                return
+
+            # If no route matched
+            log_adapter.warning(f"{request_log_tag} Unknown path requested.")
+            self.send_error(404, "Not Found")
 
         except ConnectionResetError:
-            log_adapter.warning(f"{request_log_tag} Connection reset by VLC.")
+            log_adapter.warning(f"{request_log_tag} Connection reset by client.")
         except BrokenPipeError:
-            log_adapter.warning(f"{request_log_tag} Broken pipe while writing to VLC.")
+            log_adapter.warning(f"{request_log_tag} Broken pipe while writing to client.")
         except Exception as e:
             log_adapter.error(f"{request_log_tag} Error handling GET request: {e}", exc_info=True)
             if not self.wfile.closed:
                 try: self.send_error(500, f"Internal Server Error: {e}")
                 except Exception: pass
+    
+    def _rewrite_master_playlist(self, master_content, original_master_url):
+        """Rewrites media playlist URLs in master M3U8 to point to this proxy."""
+        log_adapter = logging.LoggerAdapter(logger, {})
+        lines = master_content.splitlines()
+        modified_lines = []
+        # Base for resolving relative URLs in the master playlist if they are relative *to the master playlist itself*
+        # For media playlists, we want them to be proxied.
+        # Example: if master has "../qualityX/playlist.m3u8", we need to make it "http://proxy/video_name/qualityX/playlist.m3u8"
+
+        for i in range(len(lines)):
+            line = lines[i].strip()
+            if line.startswith("#EXT-X-STREAM-INF:"):
+                modified_lines.append(line) # Keep the info line
+                if i + 1 < len(lines):
+                    media_playlist_relative_or_absolute_url_in_master = lines[i+1].strip()
+                    # Resolve the original media playlist URL against the original master URL
+                    original_media_playlist_absolute_url = urljoin(original_master_url, media_playlist_relative_or_absolute_url_in_master)
+                    
+                    # Now, create a new URL that points to our proxy, maintaining the path structure relative to SERVER_HOST:SERVER_PORT
+                    # e.g. http://S_HOST:S_PORT/video/qual/play.m3u8 -> http://L_PROXY_HOST:L_PROXY_PORT/video/qual/play.m3u8
+                    parsed_original_media_playlist_url = urlparse(original_media_playlist_absolute_url)
+                    proxied_media_playlist_url = f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}{parsed_original_media_playlist_url.path}"
+                    
+                    modified_lines.append(proxied_media_playlist_url)
+                    log_adapter.debug(f"Master Rewrite: '{media_playlist_relative_or_absolute_url_in_master}' -> '{proxied_media_playlist_url}'")
+                    i += 1 # Skip the original URL line as we've processed it
+            else:
+                modified_lines.append(line)
+        return "\n".join(modified_lines)
+
+    def _rewrite_media_playlist(self, media_content, original_media_url):
+        """Rewrites TS segment URLs in media M3U8 to point to the proxy's decryption endpoint."""
+        log_adapter = logging.LoggerAdapter(logger, {})
+        lines = media_content.splitlines()
+        modified_lines = []
+        media_m3u8_base_url = urljoin(original_media_url, '.') # Base for resolving relative TS paths
+
+        for line in lines:
+            line_stripped = line.strip()
+            if line_stripped and not line_stripped.startswith("#") and \
+               (line_stripped.endswith(".ts") or ".ts?" in line_stripped):
+                original_segment_relative_url = line_stripped
+                original_segment_absolute_url_on_server = urljoin(media_m3u8_base_url, original_segment_relative_url)
+                
+                encoded_original_url = quote(original_segment_absolute_url_on_server, safe='')
+                rewritten_segment_url = f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/decrypt_segment?url={encoded_original_url}"
+                modified_lines.append(rewritten_segment_url)
+                log_adapter.debug(f"Media Rewrite: Segment '{original_segment_relative_url}' -> '{rewritten_segment_url}'")
+            else:
+                modified_lines.append(line)
+        return "\n".join(modified_lines)
+
+    def log_message(self, format, *args): # Quieter logging for proxy
+        logger.debug(f"Proxy HTTP Log: {self.address_string()} - {args[0]} {args[1]}")
+
 
 class ThreadingLocalProxyServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
@@ -197,16 +325,17 @@ def _run_proxy_server_target():
         current_thread_server_instance = ThreadingLocalProxyServer(
             (LOCAL_PROXY_HOST, LOCAL_PROXY_PORT), DecryptionProxyHandler)
         g_local_proxy_server_instance = current_thread_server_instance 
-        logger.info(f"PROXY_THREAD: Local decryption proxy starting on http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}")
+        logger.info(f"PROXY_THREAD: Local proxy server starting on http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}")
+        logger.info(f"PROXY_THREAD: Player available at http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/player.html")
         current_thread_server_instance.serve_forever() 
     except OSError as e:
-        logger.error(f"PROXY_THREAD: Could not start local decryption proxy (OSError): {e}")
+        logger.error(f"PROXY_THREAD: Could not start local proxy server (OSError): {e}")
         g_local_proxy_server_instance = None
     except Exception as e:
         logger.error(f"PROXY_THREAD: An unexpected error in proxy server run: {e}", exc_info=True)
         g_local_proxy_server_instance = None
     finally:
-        logger.info(f"PROXY_THREAD: Local decryption proxy server loop ({threading.current_thread().name}) has finished.")
+        logger.info(f"PROXY_THREAD: Local proxy server loop ({threading.current_thread().name}) has finished.")
 
 def start_proxy_server():
     global g_proxy_runner_thread, g_local_proxy_server_instance
@@ -216,13 +345,16 @@ def start_proxy_server():
     g_local_proxy_server_instance = None 
     g_proxy_runner_thread = threading.Thread(target=_run_proxy_server_target, daemon=True, name="ProxyServerThread")
     g_proxy_runner_thread.start()
-    time.sleep(0.5) 
+    time.sleep(0.5) # Give server a moment to start
     if g_proxy_runner_thread.is_alive() and g_local_proxy_server_instance:
         logger.info("PROXY_MAIN: Proxy server thread started and server instance successfully created.")
         return True
     else:
         logger.error("PROXY_MAIN: Proxy server thread failed to start or server instance not created.")
         if g_proxy_runner_thread and g_proxy_runner_thread.is_alive():
+            # Try to tell it to shutdown if instance wasn't formed but thread is alive
+            if g_local_proxy_server_instance: # Should be None here based on logic, but defensive
+                 g_local_proxy_server_instance.shutdown()
             g_proxy_runner_thread.join(timeout=1.0)
         g_local_proxy_server_instance = None
         g_proxy_runner_thread = None
@@ -235,10 +367,13 @@ def stop_proxy_server():
         logger.info(f"PROXY_MAIN: Attempting to stop proxy server instance: {server_instance_to_stop}")
         try:
             if hasattr(server_instance_to_stop, 'shutdown'):
-                server_instance_to_stop.shutdown()
+                server_instance_to_stop.shutdown() # This will break the serve_forever loop
+            # The thread should then exit due to serve_forever ending
             if g_proxy_runner_thread and g_proxy_runner_thread.is_alive():
-                g_proxy_runner_thread.join(timeout=3.0)
-                if g_proxy_runner_thread.is_alive(): logger.warning("PROXY_MAIN: Proxy thread did not join cleanly.")
+                g_proxy_runner_thread.join(timeout=3.0) # Wait for thread to finish
+                if g_proxy_runner_thread.is_alive(): 
+                    logger.warning("PROXY_MAIN: Proxy thread did not join cleanly after shutdown.")
+            # server_close is typically called after shutdown and join
             if hasattr(server_instance_to_stop, 'server_close'):
                 server_instance_to_stop.server_close()
         except Exception as e_shutdown:
@@ -247,43 +382,42 @@ def stop_proxy_server():
             g_local_proxy_server_instance = None 
             g_proxy_runner_thread = None
             logger.info("PROXY_MAIN: Proxy server stop sequence finished.")
+    elif g_proxy_runner_thread and g_proxy_runner_thread.is_alive():
+        # This case might happen if server instance creation failed but thread is lingering
+        logger.warning("PROXY_MAIN: Proxy server instance was None, but thread is alive. Attempting to join thread.")
+        g_proxy_runner_thread.join(timeout=1.0)
+        g_proxy_runner_thread = None
+        logger.info("PROXY_MAIN: Proxy thread join attempt finished.")
     else:
         logger.info("PROXY_MAIN: Proxy server instance was None or not started.")
 
-def parse_m3u8_attributes(attr_string):
-    """Parses attributes from #EXT-X-STREAM-INF or similar tags."""
+
+def parse_m3u8_attributes(attr_string): # Copied from your original, seems fine
     attributes = {}
     try:
-        # Regex to find KEY=VALUE or KEY="VALUE" pairs
-        # Handles values that are quoted or unquoted
-        # Corrected regex to handle simple non-string values like BANDWIDTH=12345
         for match in re.finditer(r'([A-Z0-9-]+)=("([^"]*)"|([^,"]*))', attr_string):
             key = match.group(1)
-            # value is either in group 3 (quoted) or group 4 (unquoted)
             value = match.group(3) if match.group(3) is not None else match.group(4)
-            if value.isdigit(): # Convert to int if it's all digits
+            if value.isdigit(): 
                 attributes[key] = int(value)
-            else: # Otherwise, keep as string
+            else: 
                 attributes[key] = value
     except Exception as e:
         logger.error(f"Error parsing M3U8 attributes string '{attr_string}': {e}")
     return attributes
 
-def fetch_master_m3u8(master_m3u8_url_on_server):
-    """Fetches and parses the master M3U8 playlist."""
-    logger.info(f"Fetching master M3U8 from: {master_m3u8_url_on_server}")
+def fetch_master_m3u8_for_abr_init(master_m3u8_url_on_server): # For ABRManager init
+    logger.info(f"ABR_INIT: Fetching master M3U8 from: {master_m3u8_url_on_server}")
     try:
         response = requests.get(master_m3u8_url_on_server, timeout=SOCKET_TIMEOUT_SECONDS)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to fetch master M3U8 playlist {master_m3u8_url_on_server}: {e}")
+        logger.error(f"ABR_INIT: Failed to fetch master M3U8 playlist {master_m3u8_url_on_server}: {e}")
         return None
 
     content = response.text
     lines = content.splitlines()
-    
     available_streams = []
-    # Base URL for resolving relative media playlist URLs in the master M3U8
     master_m3u8_base_url = urljoin(master_m3u8_url_on_server, '.')
 
     for i in range(len(lines)):
@@ -293,369 +427,236 @@ def fetch_master_m3u8(master_m3u8_url_on_server):
             attributes = parse_m3u8_attributes(attributes_str)
             if i + 1 < len(lines):
                 media_playlist_relative_url = lines[i+1].strip()
-                media_playlist_absolute_url = urljoin(master_m3u8_base_url, media_playlist_relative_url)
+                # IMPORTANT: For ABRManager, we need the *original* server URLs for its internal logic
+                media_playlist_absolute_url_on_origin = urljoin(master_m3u8_base_url, media_playlist_relative_url)
                 stream_info = {
-                    'url': media_playlist_absolute_url, # Absolute URL to the media M3U8 on the server
+                    'url': media_playlist_absolute_url_on_origin, 
                     'bandwidth': attributes.get('BANDWIDTH'),
                     'resolution': attributes.get('RESOLUTION'),
                     'codecs': attributes.get('CODECS'),
-                    'attributes_str': attributes_str # Store original for reference
+                    'attributes_str': attributes_str
                 }
                 available_streams.append(stream_info)
-                logger.debug(f"Found stream in master M3U8: {stream_info}")
+                logger.debug(f"ABR_INIT: Found stream in master M3U8: {stream_info}")
     
     if not available_streams:
-        logger.warning(f"No #EXT-X-STREAM-INF tags found in master M3U8 at {master_m3u8_url_on_server}")
+        logger.warning(f"ABR_INIT: No #EXT-X-STREAM-INF tags found in master M3U8 at {master_m3u8_url_on_server}")
         return None
-        
     return available_streams
 
-def fetch_media_m3u8_and_rewrite(media_m3u8_url_on_server):
-    """
-    Fetches a specific media M3U8, rewrites its TS segment URLs to point to the local proxy,
-    and returns the content of the modified M3U8 and list of original segment URLs.
-    """
-    global current_segment_urls_relative_to_media_m3u8 # For ABR to know what segments exist
-    logger.info(f"Fetching media M3U8 from: {media_m3u8_url_on_server}")
-    try:
-        response = requests.get(media_m3u8_url_on_server, timeout=SOCKET_TIMEOUT_SECONDS)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to fetch media M3U8 playlist {media_m3u8_url_on_server}: {e}")
-        return None, []
 
-    original_m3u8_content = response.text
-    modified_lines = []
-    # Base URL for resolving relative segment URLs within this media M3U8
-    media_m3u8_base_url = urljoin(media_m3u8_url_on_server, '.')
-    
-    segment_urls_for_abr = []
-
-    for line in original_m3u8_content.splitlines():
-        line_stripped = line.strip()
-        if line_stripped and not line_stripped.startswith("#") and \
-           (line_stripped.endswith(".ts") or ".ts?" in line_stripped):
-            original_segment_relative_url = line_stripped # URL as it appears in media M3U8
-            segment_urls_for_abr.append(original_segment_relative_url)
-
-            original_segment_absolute_url_on_server = urljoin(media_m3u8_base_url, original_segment_relative_url)
-            
-            # Encode the original absolute URL for the proxy's query string
-            encoded_original_url = quote(original_segment_absolute_url_on_server, safe='')
-            rewritten_segment_url = f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/proxy?url={encoded_original_url}"
-            modified_lines.append(rewritten_segment_url)
-            logger.debug(f"Rewrote media segment URL: '{original_segment_relative_url}' -> '{rewritten_segment_url}' (orig_abs: {original_segment_absolute_url_on_server})")
-        else:
-            modified_lines.append(line)
-    
-    with abr_lock: # Update global list of segments for current quality (ABR might use this)
-        current_segment_urls_relative_to_media_m3u8 = segment_urls_for_abr
-
-    return "\n".join(modified_lines)
-
-class ABRManager:
-    instance = None # Singleton instance
+class ABRManager: # Largely same as your provided, but its direct control is lessened
+    instance = None 
 
     def __init__(self, available_streams_from_master):
         if ABRManager.instance is not None:
-            raise Exception("ABRManager is a singleton!")
+            # Allow re-initialization for simplicity in script restarts, though true singleton might be stricter
+            logger.warning("ABRManager re-initialized. Previous instance overwritten.")
         ABRManager.instance = self
         
-        self.available_streams = sorted(available_streams_from_master, key=lambda s: s.get('bandwidth', 0) or 0) # Sort by bandwidth
-        self.current_stream_index = 0  # Start with the lowest quality
-        self.segment_download_stats = [] # List to store (url, size_bytes, duration_seconds)
-        self.max_stats_history = 20 # Keep history of last N segments for bandwidth estimation
+        # Ensure streams are sorted by bandwidth (lowest to highest)
+        self.available_streams = sorted(
+            [s for s in available_streams_from_master if s.get('bandwidth') is not None], 
+            key=lambda s: s['bandwidth']
+        )
+        if not self.available_streams:
+             logger.error("ABRManager initialized with no available streams with bandwidth info!")
+             # Add a dummy stream to prevent crashes if all streams lack bandwidth
+             self.available_streams = [{'url': 'dummy', 'bandwidth': 0, 'resolution': 'N/A'}]
+
+
+        self.current_stream_index_by_abr = 0 # Index for self.available_streams based on ABR algorithm
+        self.segment_download_stats = [] 
+        self.max_stats_history = 20 
         self.estimated_bandwidth_bps = 0
         
-        # ABR algorithm parameters (example)
-        self.safety_factor = 0.8
+        self.safety_factor = 0.8 # Example: Target 80% of estimated bandwidth
         self.abr_thread = None
         self.stop_abr_event = threading.Event()
-
-        if not self.available_streams:
-            logger.error("ABRManager initialized with no available streams!")
-            return
         
         logger.info(f"ABRManager initialized. Available streams (sorted by bandwidth):")
         for i, s in enumerate(self.available_streams):
             logger.info(f"  [{i}] BW: {s.get('bandwidth', 'N/A')}, Res: {s.get('resolution', 'N/A')}, URL: {s['url']}")
+        
+        self._update_current_abr_selected_url() # Initialize global based on starting index
 
-    def get_initial_media_m3u8_url(self):
-        if not self.available_streams:
-            return None
-        # Start with the lowest quality, or a pre-defined initial index
-        self.current_stream_index = 0 # Or choose based on some initial probe
-        selected_stream = self.available_streams[self.current_stream_index]
-        logger.info(f"ABR: Initial stream selected: BW {selected_stream['bandwidth']}, URL {selected_stream['url']}")
+    def _update_current_abr_selected_url(self):
+        global current_abr_algorithm_selected_media_m3u8_url_on_server
         with abr_lock:
-            global current_selected_media_m3u8_url_on_server
-            current_selected_media_m3u8_url_on_server = selected_stream['url']
-        return selected_stream['url']
+            if self.available_streams and 0 <= self.current_stream_index_by_abr < len(self.available_streams):
+                current_abr_algorithm_selected_media_m3u8_url_on_server = self.available_streams[self.current_stream_index_by_abr]['url']
+            else:
+                logger.warning("ABR: Could not update current selected URL due to invalid index or no streams.")
+
 
     def add_segment_download_stat(self, url, size_bytes, duration_seconds):
-        if duration_seconds > 0.001: # Avoid division by zero or tiny durations
+        # url is the original URL on the server, useful for identifying quality
+        if duration_seconds > 0.001: 
             self.segment_download_stats.append({'url': url, 'size': size_bytes, 'duration': duration_seconds})
             if len(self.segment_download_stats) > self.max_stats_history:
-                self.segment_download_stats.pop(0) # Keep history size limited
-            # logger.debug(f"ABR: Added stat: {size_bytes} bytes in {duration_seconds:.3f}s for {url.split('/')[-1]}")
+                self.segment_download_stats.pop(0)
+            # logger.debug(f"ABR: Added stat: {size_bytes} bytes in {duration_seconds:.3f}s for segment from {url.split('/')[-1]}")
 
     def report_download_error(self, url):
-        logger.warning(f"ABR: Reported download error for segment from URL related to {url}")
-        # Could use this to penalize current bandwidth or trigger faster downshift
+        logger.warning(f"ABR: Reported download error for segment from URL: {url}")
+        # Could implement logic here, e.g., temporary bandwidth reduction
 
     def _estimate_bandwidth(self):
         if not self.segment_download_stats:
-            return 0 # Not enough data
+            return self.estimated_bandwidth_bps # Return last estimate if no new data
         
-        # Example: Weighted moving average (more weight to recent segments)
-        # Or Harmonic Mean for robustness
-        total_bytes = 0
-        total_time = 0
-        # Using last 5 segments or all if fewer than 5
+        # Using harmonic mean for more robust estimation against outliers
+        # Consider last N segments, e.g., last 5
         relevant_stats = self.segment_download_stats[-5:]
-        if not relevant_stats: return self.estimated_bandwidth_bps # Keep last estimate if no new data
+        if not relevant_stats: return self.estimated_bandwidth_bps
 
+        sum_of_time_per_byte = 0
+        total_bytes_for_hm = 0
         for stat in relevant_stats:
-            total_bytes += stat['size']
-            total_time += stat['duration']
+            if stat['size'] > 0:
+                sum_of_time_per_byte += stat['duration'] / stat['size']
+                total_bytes_for_hm += stat['size']
         
-        if total_time == 0: return self.estimated_bandwidth_bps # Avoid division by zero
+        if total_bytes_for_hm == 0 or sum_of_time_per_byte == 0:
+            # Fallback to simple average if harmonic mean calculation is problematic
+            total_bytes_simple = sum(s['size'] for s in relevant_stats)
+            total_time_simple = sum(s['duration'] for s in relevant_stats)
+            if total_time_simple == 0: return self.estimated_bandwidth_bps
+            self.estimated_bandwidth_bps = (total_bytes_simple * 8) / total_time_simple
+        else:
+            # Harmonic mean of rates = N / sum(1/rate_i) = N / sum(time_i / byte_i)
+            # Average rate = total_bytes / total_time
+            # Effective rate here related to total_bytes_for_hm / sum_of_time_weighted_by_bytes
+            # Simplified: (total_bytes * 8) / total_time remains a common approach
+            total_bytes = sum(s['size'] for s in relevant_stats)
+            total_time = sum(s['duration'] for s in relevant_stats)
+            if total_time == 0: return self.estimated_bandwidth_bps
+            self.estimated_bandwidth_bps = (total_bytes * 8) / total_time
 
-        self.estimated_bandwidth_bps = (total_bytes * 8) / total_time # Convert to bits per second
         logger.info(f"ABR: New estimated bandwidth: {self.estimated_bandwidth_bps / 1000:.0f} Kbps (based on last {len(relevant_stats)} segments)")
         return self.estimated_bandwidth_bps
 
     def _abr_decision_logic(self):
-        """This is where the core ABR algorithm would reside."""
-        estimated_bw = self._estimate_bandwidth()
-        if estimated_bw == 0: # Not enough data or error
-            return # No change
+        if not self.available_streams or len(self.available_streams) <=1: # No decision if 0 or 1 stream
+            return
 
-        current_bw = self.available_streams[self.current_stream_index].get('bandwidth', 0) or 0
+        estimated_bw = self._estimate_bandwidth()
+        if estimated_bw == 0: return 
+
+        current_actual_bw_of_selected_stream = self.available_streams[self.current_stream_index_by_abr].get('bandwidth', 0)
         
-        # Simple rate-based selection with safety factor
-        next_best_index = self.current_stream_index
-        
-        # Try to find the highest quality we can sustain
-        for i in range(len(self.available_streams) - 1, -1, -1): # Iterate from highest to lowest
-            stream_bw = self.available_streams[i].get('bandwidth', 0) or 0
+        # Rate-based selection: Find the highest quality sustainable
+        next_best_index = 0 # Default to lowest
+        for i in range(len(self.available_streams) -1, -1, -1): # Highest to lowest
+            stream_bw = self.available_streams[i].get('bandwidth', 0)
             if estimated_bw * self.safety_factor > stream_bw:
                 next_best_index = i
-                break # Found the best fit from high down
-        else: # If loop completed without break, means even lowest quality is too high (or list empty)
-            next_best_index = 0 # Default to lowest if no suitable found (or if only one stream)
-
-        if next_best_index != self.current_stream_index:
-            # Implement stability: e.g., don't switch too often, or only if significant diff
-            # For now, just switch if different
-            old_stream_url = self.available_streams[self.current_stream_index]['url']
-            self.current_stream_index = next_best_index
-            new_stream_info = self.available_streams[self.current_stream_index]
+                break
+        
+        if next_best_index != self.current_stream_index_by_abr:
+            old_stream_info = self.available_streams[self.current_stream_index_by_abr]
+            self.current_stream_index_by_abr = next_best_index
+            new_stream_info = self.available_streams[self.current_stream_index_by_abr]
+            self._update_current_abr_selected_url() # Update the global reflecting ABR algorithm's choice
             
-            with abr_lock:
-                global current_selected_media_m3u8_url_on_server
-                current_selected_media_m3u8_url_on_server = new_stream_info['url']
-            
-            logger.info(f"ABR DECISION: Switch from {old_stream_url.split('/')[-2]} (idx {self.available_streams.index(next(s for s in self.available_streams if s['url']==old_stream_url))}) "
-                        f"to {new_stream_info['url'].split('/')[-2]} (idx {self.current_stream_index}), "
-                        f"Target BW: {new_stream_info['bandwidth']/1000:.0f} Kbps. (Estimated BW: {estimated_bw/1000:.0f} Kbps)")
-            
-            # How to make VLC switch?
-            # Option 1: Stop current, fetch new media M3U8 for new_stream_info['url'], rewrite, play. (Not seamless)
-            # Option 2: Proxy-assisted (more complex if VLC is playing one media M3U8).
-            #    If the proxy is ABR-aware, it can start fetching segments from the new quality.
-            #    The `DecryptionProxyHandler` would need to know the currently selected media M3U8 base URL
-            #    from `current_selected_media_m3u8_url_on_server` and construct segment URLs accordingly.
-            #    This requires segment names (e.g., segment-001.ts) to be consistent across qualities.
-            #    VLC will continue requesting segments based on the M3U8 it *initially* loaded.
-            #    So the proxy must be smart.
-            #
-            #    For now, this ABR logic just updates `current_selected_media_m3u8_url_on_server`.
-            #    The proxy in its current form does not use this global to change source yet.
-            #    It uses the `original_segment_url` from the query param, which comes from the M3U8 VLC has.
-            #
-            #    To make proxy-assisted ABR work:
-            #    1. VLC loads an initial media M3U8 (e.g., lowest quality).
-            #    2. ABR runs, changes `current_selected_media_m3u8_url_on_server`.
-            #    3. Proxy's do_GET needs to:
-            #       a. Get segment name from VLC's request (e.g., "segment-001.ts").
-            #       b. Get base URL for the *current ABR-selected quality* from `current_selected_media_m3u8_url_on_server`.
-            #       c. Construct the true target URL: urljoin(ABR_selected_media_m3u8_base_url, "segment-001.ts").
-            #       d. Fetch, decrypt, serve.
-            #    This change needs to be made in DecryptionProxyHandler's do_GET.
-            
-            # For now, we'll just log the decision. Actual switching mechanism needs implementation.
-            # One way is to regenerate the temp M3U8 VLC is playing from, but that's very tricky with VLC.
-            # The simplest (non-seamless) is to stop and restart VLC with the new media M3U8.
-            # For this assignment, demonstrating the ABR *decision logic* and how the proxy *could* act on it is key.
+            logger.info(f"ABR ALGORITHM DECISION: Switch from {old_stream_info['url'].split('/')[-2]} (idx {self.available_streams.index(old_stream_info)}, BW {old_stream_info.get('bandwidth',0)/1000:.0f} Kbps) "
+                        f"to {new_stream_info['url'].split('/')[-2]} (idx {self.current_stream_index_by_abr}, BW {new_stream_info.get('bandwidth',0)/1000:.0f} Kbps). "
+                        f"(Estimated Net BW: {estimated_bw/1000:.0f} Kbps)")
+            # NOTE: This decision is by the Python ABR. HLS.js makes its own separate decision.
+            # You would compare HLS.js behavior (seen in its logs/events) with this algorithm's ideal choice.
 
     def abr_loop(self):
-        logger.info("ABR monitoring thread started.")
+        logger.info("ABR monitoring thread started (for stats and algorithm decisions).")
+        # Initial decision after a short delay to gather first segment stats
+        time.sleep(5) # Wait for a few segments to be downloaded by HLS.js
         while not self.stop_abr_event.is_set():
             try:
                 self._abr_decision_logic()
             except Exception as e:
                 logger.error(f"Error in ABR decision loop: {e}", exc_info=True)
             
-            # Wait for a certain interval before next decision
-            # This interval should be related to segment duration or a fixed time
-            # For example, check every segment or every few seconds
-            time.sleep(3) # Example: make a decision every 3 seconds
-        logger.info("ABR monitoring thread stopped.")
+            # Decision interval (e.g., every few seconds or after N segments)
+            # HLS.js will be making its own decisions more frequently.
+            # This loop is for *your* ABR algorithm's simulation.
+            for _ in range(5): # Check stop event frequently during sleep
+                if self.stop_abr_event.is_set(): break
+                time.sleep(1)
+        logger.info("ABR monitoring thread (Python algorithm) stopped.")
 
     def start(self):
         self.stop_abr_event.clear()
-        self.abr_thread = threading.Thread(target=self.abr_loop, daemon=True, name="ABRLogicThread")
+        self.abr_thread = threading.Thread(target=self.abr_loop, daemon=True, name="PythonABRLogicThread")
         self.abr_thread.start()
 
     def stop(self):
         if self.abr_thread and self.abr_thread.is_alive():
-            logger.info("Stopping ABR monitoring thread...")
+            logger.info("Stopping Python ABR monitoring thread...")
             self.stop_abr_event.set()
-            self.abr_thread.join(timeout=2.0)
+            self.abr_thread.join(timeout=2.0) # Adjusted timeout
             if self.abr_thread.is_alive():
-                logger.warning("ABR monitoring thread did not stop cleanly.")
-            logger.info("ABR monitoring thread stopped.")
-        ABRManager.instance = None
+                logger.warning("Python ABR monitoring thread did not stop cleanly.")
+            else:
+                logger.info("Python ABR monitoring thread stopped.")
+        ABRManager.instance = None # Clear singleton
 
-
-def initialize_vlc_player(): # Remains the same
-    global vlc_instance, media_player, player_event_manager
-    if vlc_instance is None:
-        instance_args = [
-            '--no-video-title-show', 
-            f'--network-caching=6000', # 你可以调整这个缓冲值
-            # '--verbose=2', # 如果需要更详细的VLC日志，可以取消注释
-            '--avcodec-hw=none'  # <--- 添加这个参数尝试禁用所有硬件解码
-            # '--no-d3d11va'
-        ]
-        vlc_instance = vlc.Instance(instance_args)
-        media_player = vlc_instance.media_player_new()
-        player_event_manager = media_player.event_manager()
-        player_event_manager.event_attach(vlc.EventType.MediaPlayerEndReached, on_player_end_reached_callback)
-        player_event_manager.event_attach(vlc.EventType.MediaPlayerEncounteredError, on_player_error_callback)
-        logger.info("VLC Player initialized for HLS playback.")
-
-def on_player_end_reached_callback(event): # Remains the same
-    logger.info("VLC_EVENT: MediaPlayerEndReached - Playback finished or stream ended.")
-    player_reached_end.set()
-
-def on_player_error_callback(event): # Remains the same
-    logger.error("VLC_EVENT: MediaPlayerEncounteredError - An error occurred during VLC playback.")
-    player_reached_end.set()
-
-def play_hls_stream(video_name_on_server, initial_abr_manager=None): # Pass ABR manager
-    global player_reached_end, current_selected_media_m3u8_url_on_server
-
-    initialize_vlc_player()
-    player_reached_end.clear()
-
-    if not initial_abr_manager:
-        logger.error("ABRManager instance not provided to play_hls_stream. Cannot determine initial stream.")
-        return
-
-    # ABR manager selects the initial media M3U8 URL
-    selected_media_m3u8_url = initial_abr_manager.get_initial_media_m3u8_url()
-    if not selected_media_m3u8_url:
-        logger.error("ABRManager could not provide an initial media M3U8 URL.")
-        return
-    
-    with abr_lock: # Ensure current_selected_media_m3u8_url_on_server is set
-        current_selected_media_m3u8_url_on_server = selected_media_m3u8_url
-        logger.info(f"Initial media M3U8 URL selected by ABR: {current_selected_media_m3u8_url_on_server}")
-
-
-    # Fetch and rewrite this specific media M3U8
-    modified_media_m3u8_content = fetch_media_m3u8_and_rewrite(selected_media_m3u8_url)
-
-    if not modified_media_m3u8_content:
-        logger.error("Could not get modified media M3U8 content for initial playback. Aborting.")
-        return
-
-    temp_m3u8_file_path = None
-    try:
-        if not os.path.exists(DOWNLOAD_DIR):
-            os.makedirs(DOWNLOAD_DIR)
-        
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".m3u8", delete=False, dir=DOWNLOAD_DIR, encoding='utf-8') as tmp_file:
-            tmp_file.write(modified_media_m3u8_content)
-            temp_m3u8_file_path = tmp_file.name
-        
-        logger.info(f"Modified MEDIA M3U8 for initial playback saved to: {temp_m3u8_file_path}")
-        
-        mrl = ('file:///' + temp_m3u8_file_path.replace('\\', '/')) if os.name == 'nt' else f'file://{os.path.abspath(temp_m3u8_file_path)}'
-        logger.info(f"VLC will play MRL (from selected media M3U8): {mrl}")
-        
-        media = vlc_instance.media_new(mrl)
-        if not media: logger.error(f"Failed to create VLC media object for MRL: {mrl}"); return
-            
-        media_player.set_media(media)
-        media.release()
-
-        if media_player.play() == -1: logger.error("Failed to start VLC playback."); return
-        
-        logger.info("Playback command issued. Waiting for end or error...")
-        if initial_abr_manager: initial_abr_manager.start() # Start ABR decisions after playback starts
-
-        player_reached_end.wait() 
-        logger.info("Playback wait loop in play_hls_stream finished.")
-
-    except Exception as e:
-        logger.error(f"Error during HLS stream playback: {e}", exc_info=True)
-    finally:
-        if initial_abr_manager: initial_abr_manager.stop() # Stop ABR thread
-        if media_player and media_player.is_playing():
-            media_player.stop()
-        if temp_m3u8_file_path and os.path.exists(temp_m3u8_file_path):
-            try:
-                os.remove(temp_m3u8_file_path)
-            except OSError as e_rem:
-                logger.warning(f"Could not remove temp M3U8 {temp_m3u8_file_path}: {e_rem}")
 
 def main():
-    # ... (VLC DLL hint remains the same) ...
-
-    abr_manager = None # Initialize ABR manager variable
+    abr_manager = None
+    if not os.path.exists(DOWNLOAD_DIR):
+        os.makedirs(DOWNLOAD_DIR)
 
     try:
-        if not hasattr(AES, 'AES_KEY') or not AES.AES_KEY: # AES checks remain
-            logger.error("AES.AES_KEY not defined/empty."); return
+        if not hasattr(AES, 'AES_KEY') or not AES.AES_KEY:
+            logger.error("AES.AES_KEY not defined/empty in AES.py. Please define it."); return
         if not callable(getattr(AES, 'aes_decrypt_cbc', None)):
-            logger.error("AES.aes_decrypt_cbc not defined."); return
-        logger.info("AES module loaded.")
+            logger.error("AES.aes_decrypt_cbc function not defined in AES.py."); return
+        logger.info("AES module checks passed.")
 
-        if not start_proxy_server(): return # Start proxy first
+        if not start_proxy_server(): 
+            logger.error("Failed to start the local proxy server. Aborting.")
+            return
 
-        # 1. Construct URL for the master M3U8 playlist on the server
-        master_m3u8_url = f"http://{SERVER_HOST}:{SERVER_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8"
+        # For ABRManager initialization, fetch the original master M3U8
+        master_m3u8_url_on_origin = f"http://{SERVER_HOST}:{SERVER_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8"
+        available_streams = fetch_master_m3u8_for_abr_init(master_m3u8_url_on_origin)
         
-        # 2. Fetch and parse the master M3U8 to get available streams
-        available_streams = fetch_master_m3u8(master_m3u8_url)
         if not available_streams:
-            logger.error(f"Could not fetch or parse master M3U8 from {master_m3u8_url}. Aborting.")
-            return # Stop if master M3U8 cannot be processed
-        
-        # 3. Initialize ABR Manager with available streams
-        abr_manager = ABRManager(available_streams)
+            logger.error(f"Could not fetch or parse master M3U8 from {master_m3u8_url_on_origin} for ABR init. Aborting.")
+            # Attempt to continue without ABR manager if streams couldn't be fetched
+            # This allows proxy to still work if user wants to test non-ABR parts.
+        else:
+             abr_manager = ABRManager(available_streams)
+             abr_manager.start() # Start the Python ABR algorithm thread
 
-        # 4. Start HLS Playback, passing the ABR manager
-        # play_hls_stream will use the ABR manager to get the initial media M3U8 URL
-        play_hls_stream(VIDEO_TO_STREAM_NAME, initial_abr_manager=abr_manager)
+        # Open the HTML player page in the default web browser
+        player_page_url = f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/player.html"
+        logger.info(f"Attempting to open player page in browser: {player_page_url}")
+        webbrowser.open(player_page_url)
+
+        logger.info("Client setup complete. Proxy is running. Player should open in browser.")
+        logger.info("Press Ctrl+C to stop the client and proxy server.")
+        
+        while True: # Keep main thread alive until Ctrl+C
+            time.sleep(1)
 
     except KeyboardInterrupt:
-        logger.info("Application interrupted by user (Ctrl+C).")
+        logger.info("Application interrupted by user (Ctrl+C). Cleaning up...")
     except Exception as e:
         logger.error(f"An error occurred in main: {e}", exc_info=True)
     finally:
         logger.info("Main: Initiating cleanup...")
-        if abr_manager: # Stop ABR manager if it was started
+        if abr_manager:
             abr_manager.stop()
-        if media_player and media_player.is_playing():
-            media_player.stop()
-        if vlc_instance:
-            vlc_instance.release()
         stop_proxy_server()
-        # ... (DOWNLOAD_DIR cleanup remains) ...
+        
+        # Clean up download directory (optional, if it was used)
+        # if os.path.exists(DOWNLOAD_DIR):
+        #     try:
+        #         for f in os.listdir(DOWNLOAD_DIR): os.remove(os.path.join(DOWNLOAD_DIR, f))
+        #         os.rmdir(DOWNLOAD_DIR)
+        #         logger.info(f"Cleaned up {DOWNLOAD_DIR}")
+        #     except OSError as e_rem:
+        #         logger.warning(f"Could not fully cleanup {DOWNLOAD_DIR}: {e_rem}")
         logger.info("Client application finished.")
 
 if __name__ == "__main__":
