@@ -3,7 +3,7 @@ import threading
 import os
 import time
 import logging
-
+import AES
 # --- 全局配置 ---
 HOST = '0.0.0.0'  # 监听所有可用的网络接口
 PORT = 8081       # 服务器监听的端口号
@@ -204,24 +204,23 @@ def handle_client(client_socket, client_address_tuple):
                 # 检查文件是否存在且确实是一个文件
                 if os.path.exists(full_segment_path) and os.path.isfile(full_segment_path):
                     try:
-                        file_size = os.path.getsize(full_segment_path) # 获取文件大小
-                        
+                        with open(full_segment_path, 'rb') as f:
+                            segment_data = f.read()
+                        segment_data = AES.aes_encrypt_cbc(segment_data, AES.AES_KEY) # 加密分片数据
+                        file_size = len(segment_data) # 获取加密后的数据大小
                         # 响应客户端：先发送 "OK <file_size>\n" 头部
                         response_header = f"OK {file_size}\n"
                         client_socket.sendall(response_header.encode('utf-8'))
                         # adapter.info(f"为 {segment_filename} 发送头部信息: {response_header.strip()}") # 可以精简日志输出
-
                         send_start_time = time.time() # 记录开始发送的时间
                         sent_bytes = 0
-                        # 以二进制读取模式打开文件并分块发送
-                        with open(full_segment_path, 'rb') as f:
-                            while True:
-                                chunk = f.read(BUFFER_SIZE) # 读取一块数据
-                                if not chunk: break # 文件读取完毕
-                                client_socket.sendall(chunk) # 发送数据块
-                                sent_bytes += len(chunk)
+                        # 以二进制模式分块发送加密后的数据
+                        for i in range(0, file_size, BUFFER_SIZE):
+                            chunk = segment_data[i:i + BUFFER_SIZE] # 读取一块数据
+                            if not chunk: break # 如果没有数据了则退出循环
+                            client_socket.sendall(chunk) # 发送数据块
+                            sent_bytes += len(chunk) # 累计已发送的字节数
                         send_end_time = time.time() # 记录结束发送的时间
-                        
                         # 校验发送的字节数是否与文件大小一致
                         if sent_bytes != file_size:
                              adapter.warning(f"文件大小不匹配 {segment_filename}. 期望 {file_size}, 发送 {sent_bytes}")
@@ -229,7 +228,7 @@ def handle_client(client_socket, client_address_tuple):
                         bitrate = get_bitrate_from_filename(segment_filename) # 从文件名提取码率
                         send_duration = send_end_time - send_start_time # 计算发送耗时
                         adapter.info(
-                            f"已发送 {segment_filename} ({file_size} bytes) "
+                            f"已发送加密 {segment_filename} ({file_size} bytes) "
                             f"码率(文件名): {bitrate}, 发送耗时: {send_duration:.4f}s"
                         )
                     except ConnectionError as e: 
