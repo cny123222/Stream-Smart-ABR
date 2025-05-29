@@ -18,7 +18,7 @@ SERVER_HOST = '127.0.0.1' # Your HLS server host
 SERVER_PORT = 8081        # Your HLS server port
 LOCAL_PROXY_HOST = '127.0.0.1'
 LOCAL_PROXY_PORT = 8082   # Port for the local decryption proxy
-DOWNLOAD_DIR = "download_temp_m3u8" # Directory for storing temp modified m3u8
+DOWNLOAD_DIR = "download" # Directory for storing temp modified m3u8
 SOCKET_TIMEOUT_SECONDS = 10
 
 VIDEO_TO_STREAM_NAME = "bbb_sunflower" # Just the video name, master.m3u8 will be appended
