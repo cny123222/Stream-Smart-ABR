@@ -146,16 +146,16 @@
         <div class="info-panels-container">
             <div class="panel" id="streamInfoPanel">
                 <h2>Stream & ABR Information</h2>
-                <p><span class="label">Master Playlist URL:</span> <span id="masterUrlSpan" class="value">Loading...</span></p>
+                <p><span class="label">Video Name:</span> <span id="masterUrlSpan" class="value">Loading...</span></p>
                 <p><span class="label">ABR Control:</span> <span class="value">Python Backend</span></p>
-                <p><span class="label">HLS.js Status:</span> <span id="hlsStatusSpan" class="value">Initializing...</span></p>
-            </div>
+                <p><span class="label">Current Playing Segment:</span> <span id="currentSegmentSpan" class="value">-</span></p>
+                <p><span class="label">Loaded Quality Level:</span> <span id="loadedQualitySpan" class="value">-</span></p> </div>
 
             <div class="panel" id="qoeMetricsPanel">
-                <h2>Real-time QoE Metrics</h2>
-                <p><span class="label">Current Quality:</span> <span id="currentQualitySpan" class="value">-</span></p>
+                <h2>QoE & Network Metrics</h2>
+                <p><span class="label">Displayed Quality:</span> <span id="displayedQualitySpan" class="value">-</span></p> 
                 <p><span class="label">Buffer Level:</span> <span id="bufferLevelSpan" class="value">- s</span></p>
-                <p><span class="label">Startup Latency:</span> <span id="startupLatencySpan" class="value">- ms</span></p>
+                <p><span class="label">Network Simulator:</span> <span id="networkSimStatusSpan" class="value">N/A</span></p>
                 <p><span class="label">Total Rebuffering:</span> <span id="rebufferingCountSpan" class="value">0 events</span>, <span id="rebufferingDurationSpan" class="value">0 ms</span></p>
             </div>
         </div>
@@ -175,12 +175,13 @@
             const websocketPort = "{WEBSOCKET_PORT}";
 
             const masterM3u8Url = `http://${localProxyHost}:${localProxyPort}/${videoToStreamName}/master.m3u8`;
-            document.getElementById('masterUrlSpan').textContent = masterM3u8Url;
+            document.getElementById('masterUrlSpan').textContent = videoToStreamName; 
 
-            const hlsStatusSpan = document.getElementById('hlsStatusSpan');
-            const currentQualitySpan = document.getElementById('currentQualitySpan');
+            const currentSegmentSpan = document.getElementById('currentSegmentSpan');
+            const loadedQualitySpan = document.getElementById('loadedQualitySpan'); // Python ABR加载的等级
+            const displayedQualitySpan = document.getElementById('displayedQualitySpan'); // HLS.js实际显示的等级
             const bufferLevelSpan = document.getElementById('bufferLevelSpan');
-            const startupLatencySpan = document.getElementById('startupLatencySpan');
+            const networkSimStatusSpan = document.getElementById('networkSimStatusSpan');
             const rebufferingCountSpan = document.getElementById('rebufferingCountSpan');
             const rebufferingDurationSpan = document.getElementById('rebufferingDurationSpan');
 
@@ -203,18 +204,12 @@
 
             ws.onopen = function() { //
                 console.log("WebSocket connection established.");
-                hlsStatusSpan.textContent = "WebSocket Connected";
-                hlsStatusSpan.style.color = "green";
             };
             ws.onclose = function() { //
                 console.log("WebSocket connection closed.");
-                hlsStatusSpan.textContent = "WebSocket Closed";
-                hlsStatusSpan.style.color = "red";
             };
             ws.onerror = function(error) { //
                 console.error("WebSocket error:", error);
-                hlsStatusSpan.textContent = "WebSocket Error";
-                hlsStatusSpan.style.color = "red";
             };
             ws.onmessage = function(event) { //
                 try {
@@ -225,9 +220,18 @@
                             if (hlsInstance.currentLevel !== newLevelIndex || hlsInstance.nextLevel !== newLevelIndex) { // Modified to ensure nextLevel is also checked
                                 console.log(`Python ABR COMMAND: Set hlsInstance.nextLevel to: ${newLevelIndex}`);
                                 hlsInstance.nextLevel = newLevelIndex; // Setting nextLevel is generally preferred
+                                loadedQualitySpan.textContent = `${hlsInstance.levels[newLevelIndex].height}p @ ${(hlsInstance.levels[newLevelIndex].bitrate / 1000).toFixed(0)} kbps`;
                             }
                         } else {
                             console.warn(`Python ABR COMMAND: Invalid levelIndex ${newLevelIndex} or hlsInstance.levels not ready.`);
+                        }
+                    } else if (message.type === "NETWORK_SIM_UPDATE") { // 新增：处理来自Python的网络模拟器状态更新
+                        if (message.data && typeof message.data.bandwidth_Mbps === 'number') {
+                            networkSimStatusSpan.textContent = `${message.data.bandwidth_Mbps.toFixed(2)} Mbps`;
+                        } else if (message.data && message.data.status === 'Full Speed') {
+                            networkSimStatusSpan.textContent = "Full Speed";
+                        } else {
+                            networkSimStatusSpan.textContent = "N/A";
                         }
                     }
                 } catch (e) { console.error("Error processing ABR command from WebSocket:", e); }
@@ -285,7 +289,6 @@
                 console.log("QoE JS: Playback naturally ended.");
                 sendQoeEvent({ event: "PLAYBACK_ENDED", timestamp: Date.now() });
                 stopBufferMonitoring();
-                hlsStatusSpan.textContent = "Playback Ended";
             });
 
             window.addEventListener('beforeunload', function() { //
@@ -295,7 +298,6 @@
             });
 
             if (Hls.isSupported()) { //
-                hlsStatusSpan.textContent = "HLS.js Supported, Initializing...";
                 // Initialize HLS.js with its default settings first (autoLevelEnabled is true by default)
                 // We will override this in MANIFEST_PARSED for finer control, similar to your "good version"
                 hlsInstance = new Hls({ 
@@ -310,11 +312,9 @@
                 
                 hlsInstance.loadSource(masterM3u8Url); //
                 hlsInstance.attachMedia(video); //
-                hlsStatusSpan.textContent = "Loading Manifest...";
 
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, function (event, data) { //
                     console.log("HLS.js: Manifest parsed. Levels:", data.levels.map(l => ({bitrate: l.bitrate, resolution: `${l.width}x${l.height}`})));
-                    hlsStatusSpan.textContent = "Manifest Loaded";
                     
                     startBufferMonitoring();
 
@@ -351,7 +351,7 @@
                     const newBitrate = hlsInstance.levels[newLevel].bitrate;
                     const newHeight = hlsInstance.levels[newLevel].height;
                     console.log(`HLS.js EVENT: LEVEL_SWITCHED to level index: ${newLevel}, bitrate: ${newBitrate}`);
-                    currentQualitySpan.textContent = `${newHeight}p @ ${(newBitrate / 1000).toFixed(0)} kbps`;
+                    displayedQualitySpan.textContent = `${newHeight}p @ ${(newBitrate / 1000).toFixed(0)} kbps`;
 
                     if (jsPreviousLevel !== newLevel) { // Modified from your "good" version, jsPreviousLevel === -1 condition was implicitly handled by first assignment
                          sendQoeEvent({ //
@@ -364,23 +364,25 @@
                         jsPreviousLevel = newLevel;
                     }
                 });
+
+                hlsInstance.on(Hls.Events.FRAG_CHANGED, function(event, data) {
+                    if (data && data.frag) {
+                        const frag = data.frag;
+                        // frag.url 是完整的URL，可能太长，我们可以只取文件名或序号
+                        const segmentName = frag.url.substring(frag.url.lastIndexOf('/') + 1);
+                        // currentSegmentSpan.textContent = `${segmentName} (SN: ${frag.sn}, Level: ${frag.level})`;
+                        currentSegmentSpan.textContent = `SN: ${frag.sn} (L${frag.level})`; // 显示序号和等级
+                        console.log(`HLS.js EVENT: FRAG_CHANGED - SN: ${frag.sn}, Level: ${frag.level}, URL: ${segmentName}`);
+                    }
+                });
                 
                 hlsInstance.on(Hls.Events.ERROR, function (event, data) {  //
                     console.error('HLS.js Error:', data);
-                    hlsStatusSpan.textContent = `HLS Error: ${data.details}`;
-                    hlsStatusSpan.style.color = "orange";
-                    if (data.fatal) {
-                        hlsStatusSpan.textContent = `HLS Fatal Error: ${data.details}`;
-                        hlsStatusSpan.style.color = "red";
-                        // ... (error recovery logic from your original file)
-                    }
                 });
 
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) { //
-                hlsStatusSpan.textContent = "Native HLS Supported";
                 video.src = masterM3u8Url;
             } else { //
-                hlsStatusSpan.textContent = "HLS Not Supported";
                 alert("HLS is not supported in your browser.");
             }
 
