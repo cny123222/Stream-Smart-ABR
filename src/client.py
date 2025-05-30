@@ -6,7 +6,7 @@ import requests
 from urllib.parse import urlparse, urljoin, quote, unquote, parse_qs
 import http.server
 import socketserver
-import re
+import socket
 import webbrowser
 import json # For WebSocket messages
 
@@ -17,6 +17,7 @@ import websockets
 import AES # Your AES decryption module
 from ABR import ABRManager, fetch_master_m3u8_for_abr_init
 from QoE import QoEMetricsManager # Your QoE metrics manager
+import network_simulator # Your network simulation module
 
 # --- Configuration ---
 SERVER_HOST = '127.0.0.1'
@@ -299,35 +300,89 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             if parsed_url.path == '/decrypt_segment':
-                # ... (TS segment decryption logic - same as before, calls ABRManager.add_segment_download_stat)
                 query_params = parse_qs(parsed_url.query)
                 original_ts_url_on_server_encoded = query_params.get('url', [None])[0]
                 if not original_ts_url_on_server_encoded:
-                    self.send_error(400, "Bad Request: Missing 'url' parameter"); return
+                    self.send_error(400, "Bad Request: Missing 'url' parameter")
+                    return
                 original_ts_url_on_server = unquote(original_ts_url_on_server_encoded)
-                log_adapter.info(f"{request_log_tag} - Proxy serving TS segment, original URL: {original_ts_url_on_server}")
+                segment_filename_for_log = original_ts_url_on_server.split('/')[-1]
+                
+                effective_segment_download_duration_for_abr = -1.0 # Initialize
+                data_size_bytes = 0 # Initialize
+
                 try:
-                    fetch_start_time = time.time()
-                    response_ts = requests.get(original_ts_url_on_server, timeout=SOCKET_TIMEOUT_SECONDS, stream=True)
+                    # Step 1: Fetch segment from origin
+                    # fetch_start_time = time.time() # Not strictly needed if ABR relies on proxy->client time
+                    response_ts = requests.get(original_ts_url_on_server, timeout=SOCKET_TIMEOUT_SECONDS, stream=False)
                     response_ts.raise_for_status()
                     encrypted_data = response_ts.content
-                    fetch_end_time = time.time()
-                    if ABRManager.instance:
-                        ABRManager.instance.add_segment_download_stat(original_ts_url_on_server, len(encrypted_data), fetch_end_time - fetch_start_time)
-                    if not encrypted_data: self.send_error(502, "Bad Gateway: Empty TS content"); return
+                    # fetch_end_time = time.time()
+
+                    if not encrypted_data:
+                        self.send_error(502, "Bad Gateway: Empty TS content from origin")
+                        return
+                    
                     decrypted_data = AES.aes_decrypt_cbc(encrypted_data, AES.AES_KEY)
+                    data_size_bytes = len(decrypted_data)
+
+                    # Send HTTP Headers before starting data transmission (throttled or not)
                     self.send_response(200)
                     self.send_header('Content-type', 'video/MP2T')
-                    self.send_header('Content-Length', str(len(decrypted_data)))
+                    self.send_header('Content-Length', str(data_size_bytes))
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
-                    self.wfile.write(decrypted_data)
-                except requests.exceptions.RequestException as e_req:
+
+                    # Step 2: Simulate bandwidth for sending to hls.js using network_simulator
+                    current_sim_bps = network_simulator.get_current_simulated_bandwidth()
+
+                    if current_sim_bps is not None and current_sim_bps > 0:
+                        # Throttled transfer
+                        effective_segment_download_duration_for_abr = network_simulator.throttle_data_transfer(
+                            decrypted_data,
+                            current_sim_bps,
+                            self.wfile, # Pass the output stream (socket)
+                            segment_filename_for_log
+                        )
+                    else:
+                        # No simulation, send as fast as possible
+                        log_adapter.info(f"{request_log_tag} - Sending segment {segment_filename_for_log} ({data_size_bytes / 1024:.1f} KB) at full speed.")
+                        _t_actual_send_start = time.time()
+                        self.wfile.write(decrypted_data)
+                        self.wfile.flush()
+                        _t_actual_send_end = time.time()
+                        effective_segment_download_duration_for_abr = _t_actual_send_end - _t_actual_send_start
+                        if effective_segment_download_duration_for_abr < 0.001: # Avoid zero or too small values
+                            effective_segment_download_duration_for_abr = 0.001
+                
+                except socket.error as e_sock: # Catch socket errors during self.wfile.write (throttled or not)
+                    logger.warning(f"{request_log_tag} Socket error sending segment {segment_filename_for_log} to hls.js: {e_sock}")
+                    if ABRManager.instance: ABRManager.instance.report_download_error(original_ts_url_on_server)
+                    # Don't try to send further error responses if socket is broken
+                    return 
+                except requests.exceptions.RequestException as e_req: # Errors fetching from origin
                     if ABRManager.instance: ABRManager.instance.report_download_error(original_ts_url_on_server)
                     self.send_error(502, f"Bad Gateway: Could not fetch TS: {e_req}")
-                except Exception as e_dec:
-                    self.send_error(500, f"Internal Server Error: Decryption failed: {e_dec}")
-                return
+                    return
+                except Exception as e_proc: # Other errors like decryption, etc.
+                    logger.error(f"{request_log_tag} Error processing segment {segment_filename_for_log}: {e_proc}", exc_info=True)
+                    if ABRManager.instance: ABRManager.instance.report_download_error(original_ts_url_on_server)
+                    # Try to send an error if headers haven't been sent or socket is okay
+                    try:
+                        if not self.headers_sent: # A bit heuristic, might need better check
+                           self.send_error(500, f"Internal Server Error: Segment processing failed: {e_proc}")
+                    except Exception as e_send_err:
+                        logger.error(f"{request_log_tag} Further error sending 500: {e_send_err}")
+                    return
+                
+                # Step 3: Report to ABRManager (only if no fatal error above that prevented sending data)
+                if ABRManager.instance and effective_segment_download_duration_for_abr > 0 and data_size_bytes > 0:
+                    ABRManager.instance.add_segment_download_stat(
+                        original_ts_url_on_server,
+                        data_size_bytes,
+                        effective_segment_download_duration_for_abr
+                    )
+                return # End of /decrypt_segment
             
             self.send_error(404, "Not Found")
         except requests.exceptions.RequestException as e: 
@@ -406,19 +461,25 @@ def stop_proxy_server(): # Same
 
 
 def main():
-    global g_websocket_server_thread, g_asyncio_loop_for_websocket, qoe_manager # qoe_manager is global
-    abr_manager_instance = None # Local variable for ABRManager instance
+    def main():
+        global g_websocket_server_thread, g_asyncio_loop_for_websocket, qoe_manager
+    abr_manager_instance = None
+    scenario_player = None # Define scenario_player here for access in finally
 
+    # ... (AES key checks, DOWNLOAD_DIR creation - same) ...
     if not hasattr(AES, 'AES_KEY') or not AES.AES_KEY: logger.error("AES_KEY missing!"); return
     if not callable(getattr(AES, 'aes_decrypt_cbc', None)): logger.error("aes_decrypt_cbc missing!"); return
     if not os.path.exists(DOWNLOAD_DIR): os.makedirs(DOWNLOAD_DIR)
 
-    if not start_proxy_server(): logger.error("HTTP Proxy server failed to start."); return
+
+    if not start_proxy_server(): 
+        logger.error("HTTP Proxy server failed to start.")
+        return
 
     logger.info("Starting WebSocket server thread...")
     g_websocket_server_thread = threading.Thread(target=start_websocket_server_in_thread, daemon=True, name="WebSocketServerThread")
     g_websocket_server_thread.start()
-    time.sleep(1) # Give WebSocket server a moment to initialize its loop
+    time.sleep(1)
     
     if not (g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running()):
         logger.warning("WebSocket asyncio loop doesn't seem to be running. ABR/QoE control might fail.")
@@ -434,39 +495,58 @@ def main():
     else:
         logger.error("Could not fetch streams for ABR init. ABR will not function.")
 
-    webbrowser.open(f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/player.html")
+    # --- Initialize and start the network scenario player ---
+    logger.info("MAIN: Initializing and starting network scenario player...")
+    scenario_player = network_simulator.create_default_simulation_scenario()
+    # Or, define a custom scenario:
+    # scenario_player = network_simulator.NetworkScenarioPlayer()
+    # scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10s full speed
+    # scenario_player.add_step(duration_seconds=20, bandwidth_bps=1_000_000) # 20s at 1 Mbps
+    # ...
+    scenario_player.start()
+
+
+    player_url = f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/player.html"
+    logger.info(f"Opening player at: {player_url}")
+    webbrowser.open(player_url)
     logger.info("Client setup complete. Press Ctrl+C to stop.")
+    
     try:
-        while True: time.sleep(60) # Keep main alive, print QoE summary periodically or on exit
-            # qoe_manager.print_summary() # Optional: periodic summary
+        while True: 
+            time.sleep(60)
+            # qoe_manager.print_summary() # Optional periodic summary
     except KeyboardInterrupt:
         logger.info("Ctrl+C pressed. Shutting down...")
-    # In main() function's finally block
     finally:
         logger.info("Initiating cleanup...")
+        
         abr_streams_info = None
-        if abr_manager_instance and hasattr(abr_manager_instance, 'available_streams'): # Use the local instance
+        if abr_manager_instance and hasattr(abr_manager_instance, 'available_streams'):
             abr_streams_info = abr_manager_instance.available_streams
-        qoe_manager.log_playback_session_end(available_abr_streams=abr_streams_info)
+        qoe_manager.log_playback_session_end(available_abr_streams=abr_streams_info) # Log QoE session end
         
         if abr_manager_instance:
+            logger.info("Stopping ABR Manager...")
             abr_manager_instance.stop()
+
+        if scenario_player: # Stop the scenario player
+            logger.info("Stopping Network Scenario Player...")
+            scenario_player.stop()
 
         if g_asyncio_loop_for_websocket and g_websocket_stop_event:
             if not g_asyncio_loop_for_websocket.is_closed():
                 logger.info("Signaling WebSocket server to stop...")
-                # This sets the event, which run_websocket_server_async is waiting on
                 g_asyncio_loop_for_websocket.call_soon_threadsafe(g_websocket_stop_event.set)
             else:
-                logger.info("WebSocket asyncio loop already closed, cannot signal stop event.")
+                logger.info("WebSocket asyncio loop already closed.")
 
         if g_websocket_server_thread and g_websocket_server_thread.is_alive():
             logger.info("Waiting for WebSocket server thread to join...")
-            g_websocket_server_thread.join(timeout=5.0) # Increased timeout
+            g_websocket_server_thread.join(timeout=5.0)
             if g_websocket_server_thread.is_alive(): 
                 logger.warning("WebSocket server thread did not join cleanly.")
 
-        stop_proxy_server()
+        stop_proxy_server() # Stop the HTTP proxy server
         logger.info("Client application finished.")
 
 if __name__ == "__main__":
