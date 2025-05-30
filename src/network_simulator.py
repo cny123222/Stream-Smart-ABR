@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__) # Use the module's own logger name
 g_simulated_bandwidth_bps = None  # None means no simulation, in bits per second
 g_simulation_lock = threading.Lock()
 
+g_network_update_callback = None  # Callback for network updates, if needed
+
 def set_simulated_bandwidth(bps):
     """
     Sets the target simulated bandwidth.
@@ -23,10 +25,19 @@ def set_simulated_bandwidth(bps):
     global g_simulated_bandwidth_bps
     with g_simulation_lock:
         g_simulated_bandwidth_bps = bps
+        status_message = {}
         if bps is None:
-            logger.info("=> NET_SIM: Throttling disabled (full speed).")
+            logger.info("=> NET_SIM: Throttling disabled (full speed).") #
+            status_message = {"status": "Full Speed"}
         else:
-            logger.info(f"=> NET_SIM: Bandwidth target set to {bps / 1_000_000:.2f} Mbps.")
+            logger.info(f"=> NET_SIM: Bandwidth target set to {bps / 1_000_000:.2f} Mbps.") #
+            status_message = {"bandwidth_Mbps": bps / 1_000_000}
+            
+        if g_bandwidth_update_callback:
+            try:
+                g_bandwidth_update_callback(status_message) # 调用回调
+            except Exception as e:
+                logger.error(f"Error in network simulator bandwidth update callback: {e}")
 
 def get_current_simulated_bandwidth():
     """
@@ -37,6 +48,10 @@ def get_current_simulated_bandwidth():
     """
     with g_simulation_lock:
         return g_simulated_bandwidth_bps
+    
+def set_bandwidth_update_callback(callback_func):
+    global g_bandwidth_update_callback
+    g_bandwidth_update_callback = callback_func
 
 def throttle_data_transfer(data_to_send, target_bps, output_stream, segment_name_for_log="Unknown Segment"):
     """

@@ -230,6 +230,13 @@ def schedule_abr_broadcast(level_index):
         asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
     else:
         logger.warning("Cannot schedule ABR broadcast: WebSocket asyncio loop not available or not running.")
+        
+def schedule_network_sim_status_broadcast(status_data):
+    if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
+        message = json.dumps({"type": "NETWORK_SIM_UPDATE", "data": status_data})
+        asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
+    else:
+        logger.warning("Cannot schedule Network Sim Status broadcast: WebSocket asyncio loop not available or not running.")
 
 class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
     # ... (do_GET, _rewrite_master_playlist, _rewrite_media_playlist remain largely the same) ...
@@ -504,7 +511,7 @@ def main():
         abr_manager_instance = ABRManager(
             available_streams,
             broadcast_abr_decision_callback=schedule_abr_broadcast,
-            logic_type=selected_logic # <--- 在这里传递
+            logic_type=selected_logic
         )
         abr_manager_instance.start()
     else:
@@ -512,6 +519,7 @@ def main():
 
     # --- Initialize and start the network scenario player ---
     logger.info("MAIN: Initializing and starting network scenario player...")
+    network_simulator.set_bandwidth_update_callback(schedule_network_sim_status_broadcast)
     scenario_player = network_simulator.create_default_simulation_scenario()
     # Or, define a custom scenario:
     # scenario_player = network_simulator.NetworkScenarioPlayer()
