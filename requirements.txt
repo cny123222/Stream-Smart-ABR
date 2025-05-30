@@ -1,2 +1,2 @@
-python-vlc
 cryptography
+requests
