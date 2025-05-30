@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HLS.js Player (Python ABR + QoE)</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style> /* ... Your CSS ... */ </style>
+</head>
+<body>
+    <h1>HLS.js Streaming Client (Python ABR + QoE)</h1>
+    <div id="videoContainer"><video id="videoPlayer" controls></video></div>
+    <div class="controls">
+        <p>Master Playlist URL: <span id="masterUrlSpan"></span></p>
+        <p>ABR Control: Python Backend</p>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {{
+            const video = document.getElementById('videoPlayer');
+            const masterM3u8Url = `http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8`;
+            document.getElementById('masterUrlSpan').textContent = masterM3u8Url;
+            let hlsInstance = null;
+            const ws = new WebSocket(`ws://{LOCAL_PROXY_HOST}:{WEBSOCKET_PORT}`);
+
+            function sendQoeEvent(eventData) {{
+                if (ws.readyState === WebSocket.OPEN) {{
+                    ws.send(JSON.stringify({ type: "QOE_EVENT", data: eventData }));
+                }} else {{
+                    console.warn("WebSocket not open, QoE event not sent:", eventData);
+                }}
+            }}
+
+            ws.onopen = function() {{ console.log("WebSocket connection established."); }};
+            ws.onclose = function() {{ console.log("WebSocket connection closed."); }};
+            ws.onerror = function(error) {{ console.error("WebSocket error:", error); }};
+            ws.onmessage = function(event) {{ // For ABR commands from Python
+                try {{
+                    const message = JSON.parse(event.data);
+                    if (message.type === "SET_LEVEL" && hlsInstance) {{
+                        const newLevelIndex = parseInt(message.levelIndex);
+                        if (hlsInstance.levels && newLevelIndex >= 0 && newLevelIndex < hlsInstance.levels.length) {{
+                            if (hlsInstance.currentLevel !== newLevelIndex || hlsInstance.nextLevel !== newLevelIndex) {{
+                                console.log(`Python ABR COMMAND: Switch to level index: ${{newLevelIndex}}`);
+                                hlsInstance.nextLevel = newLevelIndex;
+                            }}
+                        }}
+                    }}
+                }} catch (e) {{ console.error("Error processing ABR command from WebSocket:", e); }}
+            }};
+
+            // --- QoE Event Tracking ---
+            let playInitiatedTimestamp = 0;
+            let isFirstPlaySignal = true; 
+            let isRebuffering = false;
+            let rebufferingStartTime = 0;
+            let jsPreviousLevel = -1; // JS-side tracking of previous level
+
+            const originalVideoPlay = video.play;
+            video.play = function(...args) {{
+                if (isFirstPlaySignal) {{ // Capture time just before actual play command for the very first play
+                    console.log("QoE JS: video.play() called, isFirstPlaySignal:", isFirstPlaySignal);
+                }}
+                return originalVideoPlay.apply(this, args);
+            }};
+
+            video.addEventListener('playing', function() {{
+                const currentEventTime = Date.now();
+                if (isFirstPlaySignal && playInitiatedTimestamp > 0) {{
+                    const startupLatency = currentEventTime - playInitiatedTimestamp;
+                    console.log(`QoE JS: Startup Latency = ${{startupLatency}} ms`);
+                    sendQoeEvent({ event: "STARTUP_LATENCY", value: startupLatency, timestamp: currentEventTime });
+                    isFirstPlaySignal = false;
+                }}
+                if (isRebuffering) {{
+                    isRebuffering = false;
+                    const rebufferingDuration = currentEventTime - rebufferingStartTime;
+                    console.log(`QoE JS: Rebuffering ended. Duration = ${{rebufferingDuration}} ms`);
+                    sendQoeEvent({ event: "REBUFFERING_END", duration: rebufferingDuration, timestamp: currentEventTime });
+                }}
+            }});
+
+            video.addEventListener('waiting', function() {{
+                const currentEventTime = Date.now();
+                if (!isFirstPlaySignal && video.currentTime > 0 && !video.paused && !video.ended) {{ 
+                    if (!isRebuffering) {{
+                        isRebuffering = true;
+                        rebufferingStartTime = currentEventTime;
+                        console.log("QoE JS: Rebuffering started");
+                        sendQoeEvent({ event: "REBUFFERING_START", timestamp: rebufferingStartTime });
+                    }}
+                }}
+            }});
+            
+            video.addEventListener('ended', function() {{
+                console.log("QoE JS: Playback naturally ended.");
+                sendQoeEvent({ event: "PLAYBACK_ENDED", timestamp: Date.now() });
+            }});
+
+            window.addEventListener('beforeunload', function() {{
+                console.log("QoE JS: Window closing, sending PLAYBACK_ENDED.");
+                sendQoeEvent({ event: "PLAYBACK_ENDED", timestamp: Date.now() });
+            }});
+
+
+            if (Hls.isSupported()) {{
+                hlsInstance = new Hls({ debug: false /* Set to true for verbose HLS logs */ });
+                
+                playInitiatedTimestamp = Date.now(); // <--- **关键：确保在这里或更早捕获初始时间**
+                console.log("QoE JS: Play initiation (HLS loadSource) timestamped at", playInitiatedTimestamp);
+                
+                hlsInstance.loadSource(masterM3u8Url);
+                hlsInstance.attachMedia(video);
+
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function (event, data) {{
+                    console.log("Manifest parsed. Levels:", hlsInstance.levels);
+                    // video.play(); // Play will be called, playInitiatedTimestamp captured by wrapper
+
+                    if (hlsInstance.levels && hlsInstance.levels.length > 1) {{
+                        jsPreviousLevel = 0; // Assume starts at level 0 for QoE tracking
+                        hlsInstance.currentLevel = 0; 
+                        hlsInstance.autoLevelCapping = -1; 
+                        hlsInstance.autoLevelEnabled = false;
+                        console.log("HLS.js auto ABR disabled. Initial level for QoE: " + jsPreviousLevel);
+                        // Send initial level to Python QoE
+                        sendQoeEvent({
+                            event: "QUALITY_SWITCH",
+                            fromLevel: -1, // Indicate no prior level
+                            toLevel: jsPreviousLevel,
+                            toBitrate: hlsInstance.levels[jsPreviousLevel].bitrate,
+                            timestamp: Date.now()
+                        });
+                    }} else if (hlsInstance.levels && hlsInstance.levels.length === 1) {{
+                        jsPreviousLevel = 0;
+                        console.log("HLS.js: Only one level available. Initial level for QoE: " + jsPreviousLevel);
+                         sendQoeEvent({
+                            event: "QUALITY_SWITCH",
+                            fromLevel: -1,
+                            toLevel: jsPreviousLevel,
+                            toBitrate: hlsInstance.levels[jsPreviousLevel].bitrate,
+                            timestamp: Date.now()
+                        });
+                    }}
+                }});
+
+                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, function(event, data) {{
+                    const newLevel = data.level;
+                    console.log(`HLS.js ACTUALLY switched to level: ${{newLevel}}`);
+                    if (jsPreviousLevel !== newLevel) {{ // Ensure it's an actual change from JS perspective
+                         sendQoeEvent({
+                            event: "QUALITY_SWITCH",
+                            fromLevel: jsPreviousLevel,
+                            toLevel: newLevel,
+                            toBitrate: hlsInstance.levels[newLevel].bitrate,
+                            timestamp: Date.now()
+                        });
+                        jsPreviousLevel = newLevel;
+                    }}
+                }});
+                
+                hlsInstance.on(Hls.Events.ERROR, function (event, data) {{ 
+                    console.error('HLS.js Error:', data);
+                    // Consider sending critical errors as QoE events if desired
+                }});
+
+            }} else if (video.canPlayType('application/vnd.apple.mpegurl')) {{
+                video.src = masterM3u8Url;
+                // Native HLS might need different QoE event listeners or might not provide all events
+            }} else {{
+                alert("HLS is not supported in your browser.");
+            }}
+        }});
+    </script>
+</body>
+</html>
