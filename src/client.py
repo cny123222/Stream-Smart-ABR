@@ -22,7 +22,7 @@ SERVER_PORT = 8081
 LOCAL_PROXY_HOST = '127.0.0.1'
 LOCAL_PROXY_PORT = 8082
 WEBSOCKET_PORT = 8083 # Port for WebSocket server
-DOWNLOAD_DIR = "download_cache"
+DOWNLOAD_DIR = "download" # Not heavily used with HLS.js direct playback
 SOCKET_TIMEOUT_SECONDS = 10
 VIDEO_TO_STREAM_NAME = "bbb_sunflower"
 
@@ -30,7 +30,7 @@ VIDEO_TO_STREAM_NAME = "bbb_sunflower"
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
                     handlers=[logging.StreamHandler()])
-logger = logging.getLogger('HLSJS_Client_With_ABR_Control')
+logger = logging.getLogger('HLSJS_Client_With_QoE')
 
 # --- Local Proxy Server Globals ---
 g_local_proxy_server_instance = None
@@ -39,26 +39,186 @@ g_proxy_runner_thread = None
 # --- WebSocket Server Globals ---
 g_connected_websocket_clients = set()
 g_websocket_server_thread = None
-g_asyncio_loop_for_websocket = None # Will store the asyncio loop for thread-safe calls
+g_asyncio_loop_for_websocket = None
+g_websocket_stop_event = None # Will be an asyncio.Event
 
 # --- ABR State ---
 abr_lock = threading.Lock()
-current_abr_algorithm_selected_media_m3u8_url_on_server = None # Still useful for logging
+current_abr_algorithm_selected_media_m3u8_url_on_server = None # For logging
 
-# --- HTML Content (Placeholder for WebSocket Client JS) ---
+# --- QoE Metrics Manager ---
+class QoEMetricsManager:
+    def __init__(self):
+        self.startup_latency_ms = None
+        self.rebuffering_events = [] # Stores {'start_ts': timestamp_ms, 'duration_ms': duration_ms, 'end_ts': timestamp_ms}
+        self.quality_switches_log = [] # Stores {'timestamp': ms, 'from_level': idx, 'to_level': idx, 'to_bitrate': bps}
+        
+        self.session_active = False
+        self.session_start_time_ms = 0
+        self.total_session_duration_ms = 0 # Actual time content was playing or supposed to be playing
+
+        self.current_level_index = -1
+        self.time_at_each_level = {} # {level_index: duration_ms}
+        self.last_event_timestamp_ms = 0 # Used to calculate duration at current level before switch/end
+        logger.info("QoEMetricsManager initialized.")
+
+    def start_session_if_needed(self, event_timestamp_ms):
+        if not self.session_active:
+            self.session_active = True
+            self.session_start_time_ms = event_timestamp_ms # Session starts with the first significant event
+            self.last_event_timestamp_ms = event_timestamp_ms
+            logger.info(f"QoE: Playback session started around {event_timestamp_ms}.")
+
+    def update_time_at_level(self, event_timestamp_ms):
+        if self.session_active and self.current_level_index != -1:
+            duration_at_current_level_ms = event_timestamp_ms - self.last_event_timestamp_ms
+            if duration_at_current_level_ms > 0:
+                self.time_at_each_level[self.current_level_index] = \
+                    self.time_at_each_level.get(self.current_level_index, 0) + duration_at_current_level_ms
+        self.last_event_timestamp_ms = event_timestamp_ms
+
+
+    def record_startup_latency(self, latency_ms, timestamp_ms):
+        self.start_session_if_needed(timestamp_ms - latency_ms) # Session started when play was initiated
+        if self.startup_latency_ms is None:
+            self.startup_latency_ms = latency_ms
+            logger.info(f"QoE Event: Startup Latency = {latency_ms} ms (at {timestamp_ms})")
+            self.last_event_timestamp_ms = timestamp_ms # Update last event time after startup
+
+    def record_rebuffering_start(self, timestamp_ms):
+        self.start_session_if_needed(timestamp_ms)
+        self.update_time_at_level(timestamp_ms)
+        self.rebuffering_events.append({'start_ts': timestamp_ms, 'duration_ms': 0, 'end_ts': None}) # duration will be updated
+        logger.info(f"QoE Event: Rebuffering Started at {timestamp_ms}")
+
+    def record_rebuffering_end(self, duration_ms, timestamp_ms):
+        self.start_session_if_needed(timestamp_ms) # Should already be active
+        # Find the last open rebuffering event
+        for event in reversed(self.rebuffering_events):
+            if event['end_ts'] is None:
+                event['duration_ms'] = duration_ms
+                event['end_ts'] = timestamp_ms
+                logger.info(f"QoE Event: Rebuffering Ended. Duration = {duration_ms} ms (at {timestamp_ms})")
+                break
+        self.last_event_timestamp_ms = timestamp_ms # Update last event time after rebuffering
+
+    def record_quality_switch(self, from_level_index, to_level_index, to_bitrate, timestamp_ms):
+        self.start_session_if_needed(timestamp_ms)
+        self.update_time_at_level(timestamp_ms)
+
+        # If from_level_index is -1, it's the initial level setting.
+        # current_level_index helps track the *actual* previous playing level.
+        actual_from_level = self.current_level_index if from_level_index == -1 or self.current_level_index != -1 else from_level_index
+
+        if actual_from_level != to_level_index : # Log only actual switches or initial set
+            log_entry = {
+                'timestamp': timestamp_ms,
+                'from_level': actual_from_level,
+                'to_level': to_level_index,
+                'to_bitrate': to_bitrate
+            }
+            self.quality_switches_log.append(log_entry)
+            if actual_from_level == -1:
+                logger.info(f"QoE Event: Initial Level set to {to_level_index} (Bitrate: {to_bitrate/1000:.0f} Kbps) at {timestamp_ms}")
+            else:
+                logger.info(f"QoE Event: Quality Switch from level {actual_from_level} to {to_level_index} (Bitrate: {to_bitrate/1000:.0f} Kbps) at {timestamp_ms}")
+        
+        self.current_level_index = to_level_index
+
+
+    def log_playback_session_end(self, timestamp_ms=None):
+        if not self.session_active:
+            logger.info("QoE: No active session to end or already ended.")
+            return
+
+        if timestamp_ms is None:
+            timestamp_ms = time.time() * 1000
+        
+        self.update_time_at_level(timestamp_ms) # Account for time since last event
+        self.total_session_duration_ms = timestamp_ms - self.session_start_time_ms
+        self.session_active = False
+        logger.info(f"QoE: Playback session ended at {timestamp_ms}. Total duration: {self.total_session_duration_ms:.0f} ms.")
+        self.print_summary()
+
+    def print_summary(self):
+        logger.info("--- QoE Summary ---")
+        if not self.session_start_time_ms: # Check if any activity was logged
+            logger.info("  No playback activity recorded for QoE summary.")
+            logger.info("--------------------")
+            return
+
+        if self.startup_latency_ms is not None:
+            logger.info(f"  Startup Latency: {self.startup_latency_ms:.2f} ms")
+        else:
+            logger.info("  Startup Latency: Not recorded")
+        
+        num_stalls = len([e for e in self.rebuffering_events if e['duration_ms'] > 0])
+        total_stall_duration = sum(e['duration_ms'] for e in self.rebuffering_events if e['duration_ms'] > 0)
+        logger.info(f"  Rebuffering Events (Stalls): {num_stalls}")
+        logger.info(f"  Total Rebuffering Duration: {total_stall_duration:.2f} ms")
+
+        logger.info(f"  Quality Switches (logged): {len(self.quality_switches_log)}")
+        # for i, switch in enumerate(self.quality_switches_log):
+        #     logger.info(f"    Switch {i+1}: From {switch['from_level']} To {switch['to_level']} (Bitrate: {switch['to_bitrate']/1000:.0f} Kbps)")
+        
+        logger.info(f"  Time spent at each quality level (index: ms):")
+        for level_idx, duration_ms in self.time_at_each_level.items():
+            bitrate_str = "N/A" # Default if not found
+            if ABRManager.instance and ABRManager.instance.available_streams:
+                # Ensure level_idx is a valid index for the list
+                if isinstance(level_idx, int) and 0 <= level_idx < len(ABRManager.instance.available_streams):
+                    stream_info = ABRManager.instance.available_streams[level_idx]
+                    if isinstance(stream_info, dict) and 'bandwidth' in stream_info:
+                        bitrate_bps = stream_info.get('bandwidth', 0)
+                        bitrate_str = f"{bitrate_bps/1000:.0f} Kbps"
+                    else:
+                        logger.debug(f"QoE Summary: Stream info for level {level_idx} is not a dict or missing bandwidth: {stream_info}")
+                else:
+                    logger.debug(f"QoE Summary: Invalid level_idx {level_idx} for available_streams length {len(ABRManager.instance.available_streams)}")
+            logger.info(f"    Level {level_idx} ({bitrate_str}): {duration_ms:.0f} ms")
+
+        # Average Played Bitrate calculation
+        if ABRManager.instance and ABRManager.instance.available_streams:
+            total_weighted_bitrate_x_time = 0 # Sum of (bitrate_bps * time_seconds_at_level)
+            total_time_at_levels_seconds = 0
+            for level_idx, duration_ms in self.time_at_each_level.items():
+                if 0 <= level_idx < len(ABRManager.instance.available_streams):
+                    bitrate_bps = ABRManager.instance.available_streams[level_idx].get('bandwidth', 0)
+                    time_seconds = duration_ms / 1000.0
+                    total_weighted_bitrate_x_time += bitrate_bps * time_seconds
+                    total_time_at_levels_seconds += time_seconds
+            
+            if total_time_at_levels_seconds > 0:
+                average_played_bitrate_kbps = (total_weighted_bitrate_x_time / total_time_at_levels_seconds) / 1000.0
+                logger.info(f"  Average Played Bitrate (based on time at levels): {average_played_bitrate_kbps:.2f} Kbps")
+            else:
+                logger.info("  Average Played Bitrate: Not enough data.")
+
+        logger.info(f"  Total Playback Session Duration (approx): {self.total_session_duration_ms:.2f} ms")
+        if self.total_session_duration_ms > 0 :
+            # Effective playing time = total_session_duration - total_stall_duration - startup_latency (if startup is part of session)
+            # For rebuffering ratio, typically total_stall_duration / (total_stall_duration + actual_playing_time)
+            # Or simpler: total_stall_duration / total_session_duration_ms
+            rebuffering_ratio = (total_stall_duration / self.total_session_duration_ms) * 100 if self.total_session_duration_ms > 0 else 0
+            logger.info(f"  Rebuffering Ratio (approx): {rebuffering_ratio:.2f}%")
+        logger.info("--------------------")
+
+# Global instance
+qoe_manager = QoEMetricsManager()
+
+
+# --- HTML Content (Updated JavaScript for QoE) ---
 HTML_PLAYER_CONTENT = f"""
 <!DOCTYPE html>
 <html>
 <head>
-    <title>HLS.js Player (Python ABR Controlled)</title>
+    <title>HLS.js Player (Python ABR + QoE)</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style> /* ... Your CSS ... */ </style>
 </head>
 <body>
-    <h1>HLS.js Streaming Client (Python ABR Controlled)</h1>
-    <div id="videoContainer">
-        <video id="videoPlayer" controls></video>
-    </div>
+    <h1>HLS.js Streaming Client (Python ABR + QoE)</h1>
+    <div id="videoContainer"><video id="videoPlayer" controls></video></div>
     <div class="controls">
         <p>Master Playlist URL: <span id="masterUrlSpan"></span></p>
         <p>ABR Control: Python Backend</p>
@@ -70,75 +230,154 @@ HTML_PLAYER_CONTENT = f"""
             const masterM3u8Url = `http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8`;
             document.getElementById('masterUrlSpan').textContent = masterM3u8Url;
             let hlsInstance = null;
-
-            if (Hls.isSupported()) {{
-                hlsInstance = new Hls({{
-                    // debug: true,
-                }});
-                hlsInstance.loadSource(masterM3u8Url);
-                hlsInstance.attachMedia(video);
-
-                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function (event, data) {{
-                    console.log("Manifest parsed. Levels available:", hlsInstance.levels);
-                    video.play();
-                    // ** IMPORTANT: Disable HLS.js internal ABR **
-                    if (hlsInstance.levels && hlsInstance.levels.length > 1) {{
-                        hlsInstance.currentLevel = 0; // Start at lowest quality (index 0)
-                        hlsInstance.autoLevelCapping = -1; // Remove any HLS.js internal capping
-                        hlsInstance.autoLevelEnabled = false; // Disable internal ABR
-                        console.log("HLS.js auto ABR disabled. Python ABR will control levels.");
-                    }}
-                }});
-
-                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, function(event, data) {{
-                    console.log(`HLS.js ACTUALLY switched to level: ${{data.level}}, Bitrate: ${{hlsInstance.levels[data.level].bitrate/1000}} Kbps`);
-                }});
-                
-                hlsInstance.on(Hls.Events.ERROR, function (event, data) {{ /* ... error handling ... */ }});
-
-            }} else if (video.canPlayType('application/vnd.apple.mpegurl')) {{
-                video.src = masterM3u8Url;
-                video.addEventListener('loadedmetadata', function () {{ video.play(); }});
-            }} else {{
-                alert("HLS is not supported in your browser.");
-            }}
-
-            // WebSocket Client Logic
             const ws = new WebSocket(`ws://{LOCAL_PROXY_HOST}:{WEBSOCKET_PORT}`);
 
-            ws.onopen = function() {{
-                console.log("WebSocket connection established with Python backend.");
-            }};
+            function sendQoeEvent(eventData) {{
+                if (ws.readyState === WebSocket.OPEN) {{
+                    ws.send(JSON.stringify({{ type: "QOE_EVENT", data: eventData }}));
+                }} else {{
+                    console.warn("WebSocket not open, QoE event not sent:", eventData);
+                }}
+            }}
 
-            ws.onmessage = function(event) {{
+            ws.onopen = function() {{ console.log("WebSocket connection established."); }};
+            ws.onclose = function() {{ console.log("WebSocket connection closed."); }};
+            ws.onerror = function(error) {{ console.error("WebSocket error:", error); }};
+            ws.onmessage = function(event) {{ // For ABR commands from Python
                 try {{
                     const message = JSON.parse(event.data);
                     if (message.type === "SET_LEVEL" && hlsInstance) {{
                         const newLevelIndex = parseInt(message.levelIndex);
                         if (hlsInstance.levels && newLevelIndex >= 0 && newLevelIndex < hlsInstance.levels.length) {{
-                            if (hlsInstance.currentLevel !== newLevelIndex || hlsInstance.nextLevel !== newLevelIndex) {{ // Avoid redundant sets
-                                console.log(`Python ABR COMMAND: Switch to level index: ${{newLevelIndex}} (current: ${{hlsInstance.currentLevel}}, next: ${{hlsInstance.nextLevel}})`);
-                                // Using nextLevel for smoother transition (switches after current segment)
-                                // If HLS.js is already trying to switch to this level, this might not be necessary
-                                // but it reinforces the decision from Python.
-                                hlsInstance.nextLevel = newLevelIndex; 
+                            if (hlsInstance.currentLevel !== newLevelIndex || hlsInstance.nextLevel !== newLevelIndex) {{
+                                console.log(`Python ABR COMMAND: Switch to level index: ${{newLevelIndex}}`);
+                                hlsInstance.nextLevel = newLevelIndex;
                             }}
-                        }} else {{
-                            console.warn("Invalid level index received from Python ABR:", newLevelIndex);
                         }}
                     }}
-                }} catch (e) {{
-                    console.error("Error processing WebSocket message:", e, "Raw data:", event.data);
+                }} catch (e) {{ console.error("Error processing ABR command from WebSocket:", e); }}
+            }};
+
+            // --- QoE Event Tracking ---
+            let playInitiatedTimestamp = 0;
+            let isFirstPlaySignal = true; 
+            let isRebuffering = false;
+            let rebufferingStartTime = 0;
+            let jsPreviousLevel = -1; // JS-side tracking of previous level
+
+            const originalVideoPlay = video.play;
+            video.play = function(...args) {{
+                if (isFirstPlaySignal) {{ // Capture time just before actual play command for the very first play
+                    console.log("QoE JS: video.play() called, isFirstPlaySignal:", isFirstPlaySignal);
                 }}
+                return originalVideoPlay.apply(this, args);
             }};
 
-            ws.onclose = function() {{
-                console.log("WebSocket connection closed.");
-            }};
+            video.addEventListener('playing', function() {{
+                const currentEventTime = Date.now();
+                if (isFirstPlaySignal && playInitiatedTimestamp > 0) {{
+                    const startupLatency = currentEventTime - playInitiatedTimestamp;
+                    console.log(`QoE JS: Startup Latency = ${{startupLatency}} ms`);
+                    sendQoeEvent({{ event: "STARTUP_LATENCY", value: startupLatency, timestamp: currentEventTime }});
+                    isFirstPlaySignal = false;
+                }}
+                if (isRebuffering) {{
+                    isRebuffering = false;
+                    const rebufferingDuration = currentEventTime - rebufferingStartTime;
+                    console.log(`QoE JS: Rebuffering ended. Duration = ${{rebufferingDuration}} ms`);
+                    sendQoeEvent({{ event: "REBUFFERING_END", duration: rebufferingDuration, timestamp: currentEventTime }});
+                }}
+            }});
 
-            ws.onerror = function(error) {{
-                console.error("WebSocket error:", error);
-            }};
+            video.addEventListener('waiting', function() {{
+                const currentEventTime = Date.now();
+                if (!isFirstPlaySignal && video.currentTime > 0 && !video.paused && !video.ended) {{ 
+                    if (!isRebuffering) {{
+                        isRebuffering = true;
+                        rebufferingStartTime = currentEventTime;
+                        console.log("QoE JS: Rebuffering started");
+                        sendQoeEvent({{ event: "REBUFFERING_START", timestamp: rebufferingStartTime }});
+                    }}
+                }}
+            }});
+            
+            video.addEventListener('ended', function() {{
+                console.log("QoE JS: Playback naturally ended.");
+                sendQoeEvent({{ event: "PLAYBACK_ENDED", timestamp: Date.now() }});
+            }});
+
+            window.addEventListener('beforeunload', function() {{
+                console.log("QoE JS: Window closing, sending PLAYBACK_ENDED.");
+                sendQoeEvent({{ event: "PLAYBACK_ENDED", timestamp: Date.now() }});
+            }});
+
+
+            if (Hls.isSupported()) {{
+                hlsInstance = new Hls({{ debug: false /* Set to true for verbose HLS logs */ }});
+                
+                playInitiatedTimestamp = Date.now(); // <--- **关键：确保在这里或更早捕获初始时间**
+                console.log("QoE JS: Play initiation (HLS loadSource) timestamped at", playInitiatedTimestamp);
+                
+                hlsInstance.loadSource(masterM3u8Url);
+                hlsInstance.attachMedia(video);
+
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function (event, data) {{
+                    console.log("Manifest parsed. Levels:", hlsInstance.levels);
+                    // video.play(); // Play will be called, playInitiatedTimestamp captured by wrapper
+
+                    if (hlsInstance.levels && hlsInstance.levels.length > 1) {{
+                        jsPreviousLevel = 0; // Assume starts at level 0 for QoE tracking
+                        hlsInstance.currentLevel = 0; 
+                        hlsInstance.autoLevelCapping = -1; 
+                        hlsInstance.autoLevelEnabled = false;
+                        console.log("HLS.js auto ABR disabled. Initial level for QoE: " + jsPreviousLevel);
+                        // Send initial level to Python QoE
+                        sendQoeEvent({{
+                            event: "QUALITY_SWITCH",
+                            fromLevel: -1, // Indicate no prior level
+                            toLevel: jsPreviousLevel,
+                            toBitrate: hlsInstance.levels[jsPreviousLevel].bitrate,
+                            timestamp: Date.now()
+                        }});
+                    }} else if (hlsInstance.levels && hlsInstance.levels.length === 1) {{
+                        jsPreviousLevel = 0;
+                        console.log("HLS.js: Only one level available. Initial level for QoE: " + jsPreviousLevel);
+                         sendQoeEvent({{
+                            event: "QUALITY_SWITCH",
+                            fromLevel: -1,
+                            toLevel: jsPreviousLevel,
+                            toBitrate: hlsInstance.levels[jsPreviousLevel].bitrate,
+                            timestamp: Date.now()
+                        }});
+                    }}
+                }});
+
+                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, function(event, data) {{
+                    const newLevel = data.level;
+                    console.log(`HLS.js ACTUALLY switched to level: ${{newLevel}}`);
+                    if (jsPreviousLevel !== newLevel) {{ // Ensure it's an actual change from JS perspective
+                         sendQoeEvent({{
+                            event: "QUALITY_SWITCH",
+                            fromLevel: jsPreviousLevel,
+                            toLevel: newLevel,
+                            toBitrate: hlsInstance.levels[newLevel].bitrate,
+                            timestamp: Date.now()
+                        }});
+                        jsPreviousLevel = newLevel;
+                    }}
+                }});
+                
+                hlsInstance.on(Hls.Events.ERROR, function (event, data) {{ 
+                    console.error('HLS.js Error:', data);
+                    // Consider sending critical errors as QoE events if desired
+                }});
+
+            }} else if (video.canPlayType('application/vnd.apple.mpegurl')) {{
+                video.src = masterM3u8Url;
+                // Native HLS might need different QoE event listeners or might not provide all events
+            }} else {{
+                alert("HLS is not supported in your browser.");
+            }}
         }});
     </script>
 </body>
@@ -148,21 +387,50 @@ HTML_PLAYER_CONTENT = f"""
  .replace("{WEBSOCKET_PORT}", str(WEBSOCKET_PORT)) \
  .replace("{VIDEO_TO_STREAM_NAME}", VIDEO_TO_STREAM_NAME)
 
-
-# --- WebSocket Server Functions ---
-async def handle_websocket_client(websocket): # Remove 'path' from arguments
+# --- WebSocket Server Functions (handle_websocket_client needs to route QoE messages) ---
+async def handle_websocket_client(websocket):
     global g_connected_websocket_clients
-    
     client_identifier = getattr(websocket, 'path', None)
     if client_identifier is None:
-        # websocket.remote_address is a tuple (host, port)
-        client_identifier = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+        try: client_identifier = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+        except Exception: client_identifier = "UnknownClient" # Fallback if remote_address also fails
             
     logger.info(f"WebSocket client connected: {client_identifier}")
     g_connected_websocket_clients.add(websocket)
     try:
-        async for message in websocket: 
-            logger.info(f"Received message from WebSocket client {client_identifier} (not expected for ABR control): {message}")
+        async for message_str in websocket:
+            logger.debug(f"WebSocket received from {client_identifier}: {message_str}")
+            try:
+                message = json.loads(message_str)
+                if message.get("type") == "QOE_EVENT":
+                    event_data = message.get("data", {})
+                    event_name = event_data.get("event")
+                    timestamp = event_data.get("timestamp", time.time() * 1000)
+
+                    if event_name == "STARTUP_LATENCY":
+                        qoe_manager.record_startup_latency(event_data.get("value"), timestamp)
+                    elif event_name == "REBUFFERING_START":
+                        qoe_manager.record_rebuffering_start(timestamp)
+                    elif event_name == "REBUFFERING_END":
+                        qoe_manager.record_rebuffering_end(event_data.get("duration"), timestamp)
+                    elif event_name == "QUALITY_SWITCH":
+                        qoe_manager.record_quality_switch(
+                            event_data.get("fromLevel"),
+                            event_data.get("toLevel"),
+                            event_data.get("toBitrate"),
+                            timestamp
+                        )
+                    elif event_name == "PLAYBACK_ENDED":
+                        qoe_manager.log_playback_session_end(timestamp)
+                    else:
+                        logger.warning(f"Unknown QoE event name from {client_identifier}: {event_name}")
+                # else: # Could be ABR commands if you had bi-directional for other things
+                #     logger.debug(f"Received non-QoE message from {client_identifier}: {message_str}")
+
+            except json.JSONDecodeError:
+                logger.error(f"Failed to decode JSON from WebSocket ({client_identifier}): {message_str}")
+            except Exception as e:
+                logger.error(f"Error processing message from {client_identifier}: {e}", exc_info=True)
     except websockets.exceptions.ConnectionClosedOK:
         logger.info(f"WebSocket client {client_identifier} disconnected gracefully.")
     except websockets.exceptions.ConnectionClosedError as e:
@@ -174,23 +442,102 @@ async def handle_websocket_client(websocket): # Remove 'path' from arguments
         logger.info(f"WebSocket client {client_identifier} removed from connected set.")
 
 async def run_websocket_server_async():
-    global g_asyncio_loop_for_websocket
-    g_asyncio_loop_for_websocket = asyncio.get_event_loop()
+    global g_asyncio_loop_for_websocket, g_websocket_stop_event # g_asyncio_loop_for_websocket is set by the calling thread
+
+    # Sanity check: ensure the loop we think we are using is indeed the current running one
+    # This part is mostly for debugging/understanding; websockets.serve should use get_running_loop()
+    try:
+        current_loop = asyncio.get_running_loop()
+        if g_asyncio_loop_for_websocket is not current_loop:
+            logger.warning(
+                f"run_websocket_server_async: g_asyncio_loop_for_websocket (id: {id(g_asyncio_loop_for_websocket)}) "
+                f"is not the current running loop (id: {id(current_loop)}). This might be an issue if not intended."
+            )
+            # If start_websocket_server_in_thread correctly sets the loop for its thread,
+            # and then calls run_until_complete on that loop for this coroutine,
+            # then get_running_loop() within this coroutine should return that same loop.
+    except RuntimeError:
+        logger.error("run_websocket_server_async: No current asyncio loop running when expected!")
+        return # Cannot proceed without a loop
+
+    if g_websocket_stop_event is None:
+        # Create the event within the context of the loop this coroutine is running on
+        g_websocket_stop_event = asyncio.Event() 
+
     logger.info(f"Starting WebSocket server on ws://{LOCAL_PROXY_HOST}:{WEBSOCKET_PORT}")
-    async with websockets.serve(handle_websocket_client, LOCAL_PROXY_HOST, WEBSOCKET_PORT):
-        await asyncio.Future() # Run forever
+    
+    server_instance = None
+    try:
+        # REMOVED: loop=g_asyncio_loop_for_websocket from the websockets.serve call
+        async with websockets.serve(handle_websocket_client, LOCAL_PROXY_HOST, WEBSOCKET_PORT) as server:
+            server_instance = server 
+            server_address = "N/A"
+            if server.sockets:
+                try:
+                    server_address = server.sockets[0].getsockname()
+                except Exception: # Handle cases where getsockname might not be available immediately or on all socket types
+                    pass
+            logger.info(f"WebSocket server '{server_address}' now serving.")
+            await g_websocket_stop_event.wait() 
+    except asyncio.CancelledError:
+        logger.info("WebSocket server task (run_websocket_server_async) was cancelled.")
+    except Exception as e: # Catch other potential errors during serve()
+        logger.error(f"Error during websockets.serve: {e}", exc_info=True)
+    finally:
+        if server_instance:
+            logger.info("Closing WebSocket server instance...")
+            server_instance.close()
+            try:
+                await server_instance.wait_closed() 
+            except Exception as e_close:
+                logger.error(f"Error during server_instance.wait_closed: {e_close}")
+        logger.info("WebSocket server (run_websocket_server_async) has shut down.")
 
 def start_websocket_server_in_thread():
-    global g_websocket_server_thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    global g_websocket_server_thread, g_asyncio_loop_for_websocket
+    
+    thread_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(thread_loop)
+    # This global variable now correctly holds the loop object
+    # that is exclusively managed by this WebSocket server thread.
+    g_asyncio_loop_for_websocket = thread_loop 
+
     try:
-        loop.run_until_complete(run_websocket_server_async())
-    except KeyboardInterrupt: # Allow Ctrl+C to stop this thread's loop if it's the main focus
-        logger.info("WebSocket server thread received KeyboardInterrupt.")
+        thread_loop.run_until_complete(run_websocket_server_async())
+    except KeyboardInterrupt: 
+        logger.info("WebSocket server thread (run_until_complete) received KeyboardInterrupt.")
+    except SystemExit: 
+        logger.info("WebSocket server asyncio loop stopping (SystemExit).")
     finally:
-        loop.close()
-        logger.info("WebSocket server asyncio loop closed.")
+        logger.info("WebSocket server thread: Cleaning up asyncio loop.")
+        try:
+            # Attempt to cancel all remaining tasks in this specific loop
+            all_tasks = asyncio.all_tasks(loop=thread_loop)
+            if all_tasks:
+                logger.info(f"Cancelling {len(all_tasks)} outstanding asyncio tasks in WebSocket thread loop...")
+                for task in all_tasks:
+                    if not task.done() and not task.cancelled(): # Check if cancellation is needed
+                        task.cancel()
+                # Wait for tasks to process cancellation
+                # This gather should be run by the loop itself.
+                # However, run_until_complete has exited.
+                # We might need to run gather within a short final run_until_complete if tasks need cleanup.
+                # For simplicity now, we assume cancellation is set.
+                # thread_loop.run_until_complete(asyncio.gather(*all_tasks, return_exceptions=True))
+                # This can be tricky if the loop is already stopping.
+            
+            # If loop is stopping due to g_websocket_stop_event.set() -> run_until_complete finishes,
+            # then we proceed to close.
+            if thread_loop.is_running(): # Should not be true if run_until_complete exited cleanly
+                logger.warning("WebSocket thread loop still running unexpectedly during cleanup; attempting stop.")
+                thread_loop.stop()
+            if not thread_loop.is_closed():
+                thread_loop.close()
+                logger.info("WebSocket server asyncio loop closed by thread.")
+            else:
+                logger.info("WebSocket server asyncio loop was already closed.")
+        except RuntimeError as e:
+             logger.error(f"RuntimeError during WebSocket thread loop cleanup: {e}")
 
 
 async def broadcast_message_async(message_str):
@@ -204,7 +551,6 @@ async def broadcast_message_async(message_str):
                 if isinstance(result, Exception):
                     client_repr = str(clients_to_send_to[i].remote_address) if hasattr(clients_to_send_to[i], 'remote_address') else "Unknown Client"
                     logger.error(f"Error sending message to WebSocket client {client_repr}: {result}")
-
 
 def schedule_abr_broadcast(level_index):
     if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
@@ -307,17 +653,15 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
             
             self.send_error(404, "Not Found")
-        except Exception as e:
-            # ... error handling ...
-            pass
-
-    def _rewrite_master_playlist(self, master_content, original_master_url):
-        # This function should ensure all variants are present and their media playlist URLs
-        # are rewritten to point to this proxy.
-        # The logic should be similar to your previous version that passed all variants.
-        log_adapter = logging.LoggerAdapter(logger, {})
-        lines = master_content.splitlines()
-        modified_lines = []
+        except requests.exceptions.RequestException as e: 
+            logger.error(f"{request_log_tag} Proxy HTTP fetch error: {e}"); 
+            self.send_error(502, f"Bad Gateway: {e}")
+        except Exception as e: 
+            logger.error(f"{request_log_tag} Proxy error: {e}", exc_info=True); 
+            self.send_error(500, "Internal Server Error")
+            
+    def _rewrite_master_playlist(self, master_content, original_master_url): # Same
+        lines = master_content.splitlines(); modified_lines = []
         for i in range(len(lines)):
             line = lines[i].strip()
             if line.startswith("#EXT-X-STREAM-INF:"):
@@ -332,31 +676,18 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
             else:
                 modified_lines.append(line)
         return "\n".join(modified_lines)
-
-
-    def _rewrite_media_playlist(self, media_content, original_media_url):
-        # This function rewrites TS segment URLs to point to /decrypt_segment
-        # Logic is same as your previous version.
-        log_adapter = logging.LoggerAdapter(logger, {})
-        lines = media_content.splitlines()
-        modified_lines = []
-        media_m3u8_base_url = urljoin(original_media_url, '.')
+    
+    def _rewrite_media_playlist(self, media_content, original_media_url): # Same
+        lines = media_content.splitlines(); modified_lines = []
+        base_url = urljoin(original_media_url, '.')
         for line in lines:
-            line_stripped = line.strip()
-            if line_stripped and not line_stripped.startswith("#") and \
-               (line_stripped.endswith(".ts") or ".ts?" in line_stripped):
-                original_segment_relative_url = line_stripped
-                original_segment_absolute_url_on_server = urljoin(media_m3u8_base_url, original_segment_relative_url)
-                encoded_original_url = quote(original_segment_absolute_url_on_server, safe='')
-                rewritten_segment_url = f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/decrypt_segment?url={encoded_original_url}"
-                modified_lines.append(rewritten_segment_url)
-            else:
-                modified_lines.append(line)
+            s_line = line.strip()
+            if s_line and not s_line.startswith("#") and (s_line.endswith(".ts") or ".ts?" in s_line):
+                abs_seg_url = urljoin(base_url, s_line); enc_seg_url = quote(abs_seg_url, safe='')
+                modified_lines.append(f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/decrypt_segment?url={enc_seg_url}")
+            else: modified_lines.append(line)
         return "\n".join(modified_lines)
-
-    def log_message(self, format, *args):
-        logger.debug(f"Proxy HTTP Log: {self.address_string()} - {args[0]} {args[1]}")
-
+    def log_message(self, format, *args): logger.debug(f"ProxyHTTP: {self.address_string()} - {args[0]} {args[1]}")
 
 class ThreadingLocalProxyServer(socketserver.ThreadingMixIn, http.server.HTTPServer): # Same
     daemon_threads = True
@@ -371,7 +702,7 @@ def _run_proxy_server_target(): # Same
         g_local_proxy_server_instance.serve_forever() 
     except Exception as e: logger.error(f"PROXY_THREAD: Error: {e}", exc_info=True); g_local_proxy_server_instance = None
     finally: logger.info("PROXY_THREAD: Proxy server loop finished.")
-
+    
 
 def start_proxy_server(): # Same, ensure it returns True/False
     # ... (same as your last working version) ...
@@ -397,7 +728,6 @@ def stop_proxy_server(): # Same
         logger.info("PROXY_MAIN: Proxy server stopped.")
 
 
-# --- ABRManager (Modified to broadcast decisions) ---
 class ABRManager:
     instance = None 
 
@@ -520,7 +850,6 @@ class ABRManager:
 
 # Function to fetch initial master m3u8 for ABRManager setup
 def fetch_master_m3u8_for_abr_init(master_m3u8_url_on_server):
-    # ... (Same as your previous version - this gets original URLs and attributes for ABR init) ...
     logger.info(f"ABR_INIT: Fetching master M3U8 from: {master_m3u8_url_on_server}")
     try:
         response = requests.get(master_m3u8_url_on_server, timeout=SOCKET_TIMEOUT_SECONDS)
@@ -558,64 +887,61 @@ def parse_m3u8_attributes(attr_string): # Ensure this is defined
 
 
 def main():
-    global g_websocket_server_thread, g_asyncio_loop_for_websocket # Ensure global scope for loop if accessed elsewhere for shutdown
-    abr_manager = None
-    # ... (AES checks, DOWNLOAD_DIR creation) ...
-    if not hasattr(AES, 'AES_KEY') or not AES.AES_KEY: logger.error("AES_KEY not defined!"); return
-    if not callable(getattr(AES, 'aes_decrypt_cbc', None)): logger.error("aes_decrypt_cbc not defined!"); return
+    global g_websocket_server_thread, g_asyncio_loop_for_websocket, qoe_manager # qoe_manager is global
+    abr_manager_instance = None # Local variable for ABRManager instance
 
-    # 1. Start the HTTP Proxy Server
-    if not start_proxy_server(): 
-        logger.error("Failed to start the local HTTP proxy server. Aborting.")
-        return
+    if not hasattr(AES, 'AES_KEY') or not AES.AES_KEY: logger.error("AES_KEY missing!"); return
+    if not callable(getattr(AES, 'aes_decrypt_cbc', None)): logger.error("aes_decrypt_cbc missing!"); return
+    if not os.path.exists(DOWNLOAD_DIR): os.makedirs(DOWNLOAD_DIR)
 
-    # 2. Start the WebSocket Server in a separate thread
+    if not start_proxy_server(): logger.error("HTTP Proxy server failed to start."); return
+
     logger.info("Starting WebSocket server thread...")
     g_websocket_server_thread = threading.Thread(target=start_websocket_server_in_thread, daemon=True, name="WebSocketServerThread")
     g_websocket_server_thread.start()
+    time.sleep(1) # Give WebSocket server a moment to initialize its loop
     
-    # Wait a moment for the WebSocket server's asyncio loop to be assigned
-    time.sleep(1) 
     if not (g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running()):
-        logger.error("WebSocket server asyncio loop did not start correctly. ABR control might fail.")
-        # Decide if you want to abort or continue without WebSocket ABR control
-        # For now, we'll log and continue, ABRManager might log errors when trying to broadcast
+        logger.warning("WebSocket asyncio loop doesn't seem to be running. ABR/QoE control might fail.")
 
-    # 3. Initialize ABR Manager (after proxy and WebSocket are ready)
-    master_m3u8_url_on_origin = f"http://{SERVER_HOST}:{SERVER_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8"
-    available_streams = fetch_master_m3u8_for_abr_init(master_m3u8_url_on_origin)
+    master_m3u8_url = f"http://{SERVER_HOST}:{SERVER_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8"
+    available_streams = fetch_master_m3u8_for_abr_init(master_m3u8_url)
     if available_streams:
-        abr_manager = ABRManager(available_streams) # ABRManager constructor now sends initial level
-        abr_manager.start() # Start ABR decision loop
+        abr_manager_instance = ABRManager(available_streams) # Creates ABRManager.instance
+        abr_manager_instance.start()
     else:
-        logger.error(f"Could not fetch master M3U8 for ABR init from {master_m3u8_url_on_origin}. ABR will not function.")
+        logger.error("Could not fetch streams for ABR init. ABR will not function.")
 
-    # 4. Open browser
-    player_page_url = f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/player.html"
-    logger.info(f"Attempting to open player page in browser: {player_page_url}")
-    webbrowser.open(player_page_url)
-
+    webbrowser.open(f"http://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}/player.html")
     logger.info("Client setup complete. Press Ctrl+C to stop.")
     try:
-        while True: time.sleep(1) # Keep main thread alive
+        while True: time.sleep(60) # Keep main alive, print QoE summary periodically or on exit
+            # qoe_manager.print_summary() # Optional: periodic summary
     except KeyboardInterrupt:
-        logger.info("Application interrupted by user (Ctrl+C).")
+        logger.info("Ctrl+C pressed. Shutting down...")
+    # In main() function's finally block
     finally:
-        logger.info("Main: Initiating cleanup...")
-        if abr_manager: abr_manager.stop()
+        logger.info("Initiating cleanup...")
+        qoe_manager.log_playback_session_end() 
         
-        # Stop WebSocket server's asyncio loop (if it's running)
-        if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
-            logger.info("Stopping WebSocket server asyncio loop...")
-            g_asyncio_loop_for_websocket.call_soon_threadsafe(g_asyncio_loop_for_websocket.stop)
-            # The run_websocket_server_async will then exit its await asyncio.Future()
-        
+        if abr_manager_instance: 
+            abr_manager_instance.stop()
+
+        if g_asyncio_loop_for_websocket and g_websocket_stop_event:
+            if not g_asyncio_loop_for_websocket.is_closed():
+                logger.info("Signaling WebSocket server to stop...")
+                # This sets the event, which run_websocket_server_async is waiting on
+                g_asyncio_loop_for_websocket.call_soon_threadsafe(g_websocket_stop_event.set)
+            else:
+                logger.info("WebSocket asyncio loop already closed, cannot signal stop event.")
+
         if g_websocket_server_thread and g_websocket_server_thread.is_alive():
             logger.info("Waiting for WebSocket server thread to join...")
-            g_websocket_server_thread.join(timeout=2.0)
-            if g_websocket_server_thread.is_alive(): logger.warning("WebSocket server thread did not join cleanly.")
-        
-        stop_proxy_server() # Stop HTTP proxy
+            g_websocket_server_thread.join(timeout=5.0) # Increased timeout
+            if g_websocket_server_thread.is_alive(): 
+                logger.warning("WebSocket server thread did not join cleanly.")
+
+        stop_proxy_server()
         logger.info("Client application finished.")
 
 if __name__ == "__main__":
