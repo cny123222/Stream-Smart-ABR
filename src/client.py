@@ -84,6 +84,15 @@ async def handle_websocket_client(websocket):
                         )
                     elif event_name == "PLAYBACK_ENDED":
                         qoe_manager.log_playback_session_end(timestamp)
+                    elif event_name == "BUFFER_UPDATE":
+                        buffer_value_seconds = event_data.get("value")
+                        logger.debug(f"QoE Event from {client_identifier}: Buffer Update = {buffer_value_seconds:.2f}s at {timestamp}")
+                        # 将缓冲区信息传递给 ABRManager
+                        if ABRManager.instance:
+                            # 你需要在 ABRManager 中添加一个方法来接收这个值
+                            ABRManager.instance.update_player_buffer_level(buffer_value_seconds) 
+                        else:
+                            logger.warning("ABRManager instance not available to update buffer level.")
                     else:
                         logger.warning(f"Unknown QoE event name from {client_identifier}: {event_name}")
                 # else: # Could be ABR commands if you had bi-directional for other things
