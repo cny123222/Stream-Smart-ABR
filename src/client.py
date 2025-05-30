@@ -496,9 +496,15 @@ def main():
     master_m3u8_url = f"http://{SERVER_HOST}:{SERVER_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8"
     available_streams = fetch_master_m3u8_for_abr_init(master_m3u8_url)
     if available_streams:
+        # --- 选择你想要的决策逻辑 ---
+        # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
+        selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+        # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
+
         abr_manager_instance = ABRManager(
             available_streams,
-            broadcast_abr_decision_callback=schedule_abr_broadcast
+            broadcast_abr_decision_callback=schedule_abr_broadcast,
+            logic_type=selected_logic # <--- 在这里传递
         )
         abr_manager_instance.start()
     else:
