@@ -5,6 +5,11 @@ import re
 import requests
 from urllib.parse import urljoin
 
+import os
+import numpy as np
+import random
+import json
+
 logger = logging.getLogger(__name__) # Use module-specific logger
 
 SOCKET_TIMEOUT_SECONDS = 10
@@ -55,10 +60,18 @@ class ABRManager:
     # --- 新增：定义决策逻辑的枚举或常量 ---
     LOGIC_TYPE_BANDWIDTH_ONLY = "bandwidth_only"
     LOGIC_TYPE_BANDWIDTH_BUFFER = "bandwidth_buffer"
-    LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE = "enhanced_buffer_response" # 新的、更积极响应缓冲区的逻辑
+    LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE = "enhanced_buffer_response"
+    LOGIC_TYPE_Q_LEARNING = "q_learning"
 
     def __init__(self, available_streams_from_master, broadcast_abr_decision_callback,
-                 logic_type=LOGIC_TYPE_BANDWIDTH_BUFFER): # 默认使用带宽+缓冲区逻辑
+                 logic_type=LOGIC_TYPE_Q_LEARNING, # 可以将Q学习设为默认或通过参数选择
+                 # --- Q学习相关参数 ---
+                 q_learning_rate=0.1,
+                 q_discount_factor=0.9,
+                 q_epsilon=0.1, # 初始探索率
+                 q_epsilon_decay=0.995, # 探索率衰减
+                 q_epsilon_min=0.01,
+                 q_table_save_path="q_table.json"):
         ABRManager.instance = self
         self.available_streams = sorted(
             [s for s in available_streams_from_master if s.get('bandwidth') is not None],
@@ -84,11 +97,44 @@ class ABRManager:
         self.logic_type = logic_type
         logger.info(f"ABRManager initialized with logic type: {self.logic_type}")
         # ---
+        
+        if self.logic_type == self.LOGIC_TYPE_Q_LEARNING:
+            self.lr = q_learning_rate
+            self.gamma = q_discount_factor
+            self.epsilon = q_epsilon
+            self.epsilon_decay = q_epsilon_decay
+            self.epsilon_min = q_epsilon_min
+            self.q_table_save_path = q_table_save_path
+            
+            # --- 初始化Q表 ---
+            # 状态空间维度: (带宽等级数, 缓冲等级数, 质量等级数)
+            # 动作空间维度: 质量等级数
+            # 这些离散化的函数和维度大小需要你根据实际情况定义
+            self.bw_levels = self._discretize_bandwidth_levels() # 返回带宽等级定义
+            self.buffer_levels = self._discretize_buffer_levels() # 返回缓冲等级定义
+            self.num_quality_levels = len(self.available_streams)
+
+            # Q表初始化为0或小的随机数
+            self.q_table = np.zeros((len(self.bw_levels) + 1, # +1 用于处理超出范围的情况或作为特殊标记
+                                     len(self.buffer_levels) + 1,
+                                     self.num_quality_levels, # 当前质量作为状态的一部分
+                                     self.num_quality_levels)) # 动作是选择下一个质量
+
+            self._load_q_table() # 尝试加载已保存的Q表
+
+            self.last_state_action_reward = None # 用于存储 (s, a, R, s') 中的 s, a
+            self.last_played_quality_index = self.current_stream_index_by_abr # 用于计算切换惩罚
+
 
         # ... (其余初始化代码，如日志、广播初始决策等保持不变) ...
-        if self.available_streams: #
-            self._update_current_abr_selected_url_logging() #
-        self.broadcast_abr_decision(self.current_stream_index_by_abr) #
+        if self.available_streams:
+            self._update_current_abr_selected_url_logging()
+        # Q学习的初始决策可能随机或基于一个简单的策略，直到Q表有意义
+        if self.logic_type != self.LOGIC_TYPE_Q_LEARNING:
+            self.broadcast_abr_decision(self.current_stream_index_by_abr)
+        else:
+            # Q学习的初始动作可以在第一次 _logic_q_learning 调用时决定
+            pass
 
 
     def _update_current_abr_selected_url_logging(self): # 和你之前的一样
@@ -149,7 +195,6 @@ class ABRManager:
         # logger.info(f"ABR SimpleAvg BW Est: {self.estimated_bandwidth_bps / 1000:.0f} Kbps") # 日志由具体决策逻辑打印
         return self.estimated_bandwidth_bps
 
-    # --- 新增：一个稍微增强的带宽估计，对近期和突变响应更快一点 (示例) ---
     def _estimate_bandwidth_enhanced(self):
         # 这个方法可以更复杂，例如使用谐波平均值，或者对最近的片段赋予更高权重
         # 这里我们简单实现一个：如果最近一个片段下载速度远低于平均，则临时拉低平均值
@@ -184,6 +229,80 @@ class ABRManager:
     def get_current_abr_decision_url(self): # 和你之前的一样
         with self._internal_lock:
             return self._current_selected_url_for_logging
+        
+    # --- Q学习辅助方法 ---
+    def _discretize_bandwidth(self, current_bandwidth_bps):
+        # 示例：将实际带宽值映射到离散等级索引
+        # self.bw_levels = [(0, 1e6), (1e6, 3e6), (3e6, 5e6), (5e6, 10e6), (10e6, float('inf'))]
+        for i, (low, high) in enumerate(self.bw_levels):
+            if low <= current_bandwidth_bps < high:
+                return i
+        return len(self.bw_levels) # 超出定义的最高等级
+
+    def _discretize_buffer(self, current_buffer_s):
+        # 示例：将实际缓冲时长映射到离散等级索引
+        # self.buffer_levels = [(0, 5), (5, 10), (10, 20), (20, 30), (30, float('inf'))]
+        for i, (low, high) in enumerate(self.buffer_levels):
+            if low <= current_buffer_s < high:
+                return i
+        return len(self.buffer_levels) # 超出定义的最高等级
+
+    def _get_current_q_state(self):
+        # 获取并离散化当前状态
+        # 注意：带宽估计和缓冲区获取需要是最新的
+        estimated_bw_bps = self._estimate_bandwidth_enhanced() # 或者你选择的其他估计方法
+        with self._internal_lock:
+            current_buffer_s = self.current_player_buffer_s
+        
+        # current_quality_index 应该是上一个决策/实际播放的质量等级
+        # 但在做决策时，我们通常用的是 *导致* 当前缓冲和带宽观察值的那个质量
+        # self.current_stream_index_by_abr 是 ABR *想要* 设置的等级
+        # self.last_played_quality_index 是 QoE 反馈回来 *实际* 播放的等级 (或者由 LEVEL_SWITCHED 更新)
+        # 为简单起见，我们先用 self.current_stream_index_by_abr (即上一次决策的结果)
+        # 更准确的做法是，QoE模块上报实际播放的码率和该码率下的体验，然后用于Q表更新
+        
+        discrete_bw = self._discretize_bandwidth(estimated_bw_bps)
+        discrete_buf = self._discretize_buffer(current_buffer_s)
+        # current_quality_idx_for_state = self.current_stream_index_by_abr # 或者 self.last_played_quality_index
+        current_quality_idx_for_state = self.last_played_quality_index # 使用上一个实际播放的质量作为当前状态的一部分
+
+        return (discrete_bw, discrete_buf, current_quality_idx_for_state)
+
+    def _save_q_table(self):
+        try:
+            # Q表是numpy数组，直接用json存可能不方便，可以转成list
+            # 或者使用 numpy.save / numpy.load
+            with open(self.q_table_save_path, 'w') as f:
+                json.dump(self.q_table.tolist(), f)
+            logger.info(f"Q-Table saved to {self.q_table_save_path}")
+        except Exception as e:
+            logger.error(f"Error saving Q-Table: {e}")
+
+    def _load_q_table(self):
+        try:
+            if os.path.exists(self.q_table_save_path):
+                with open(self.q_table_save_path, 'r') as f:
+                    q_list = json.load(f)
+                    self.q_table = np.array(q_list)
+                logger.info(f"Q-Table loaded from {self.q_table_save_path}")
+        except Exception as e:
+            logger.error(f"Error loading Q-Table or Q-Table not found, starting fresh: {e}")
+            # 如果加载失败，确保Q表维度正确并初始化
+            self.q_table = np.zeros((len(self.bw_levels) + 1,
+                                     len(self.buffer_levels) + 1,
+                                     self.num_quality_levels,
+                                     self.num_quality_levels))
+
+
+    # --- 示例：你需要定义这些离散化级别 ---
+    def _discretize_bandwidth_levels(self): # 定义带宽桶
+        # 例如: levels in Mbps, then convert to bps
+        # [(min_bps, max_bps), ...]
+        return [(0, 1*1024*1024), (1*1024*1024, 3*1024*1024), (3*1024*1024, 6*1024*1024), (6*1024*1024, float('inf'))]
+
+    def _discretize_buffer_levels(self): # 定义缓冲桶
+        # 例如: levels in seconds
+        return [(0, 5.0), (5.0, 10.0), (10.0, 20.0), (20.0, float('inf'))]
 
     # --- 决策逻辑的主分发方法 ---
     def _abr_decision_logic(self):
@@ -193,6 +312,8 @@ class ABRManager:
             self._logic_bandwidth_buffer()
         elif self.logic_type == self.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE:
             self._logic_enhanced_buffer_response()
+        elif self.logic_type == self.LOGIC_TYPE_Q_LEARNING:
+            self._logic_q_learning() # 调用Q学习决策逻辑
         else:
             logger.warning(f"Unknown ABR logic type: {self.logic_type}. Defaulting to bandwidth_buffer.")
             self._logic_bandwidth_buffer()
@@ -411,23 +532,137 @@ class ABRManager:
         else:
             logger.info(f"ABR DECISION (ENHANCED): No change from level {current_level_index}. Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
 
+    # --- Q学习的决策和更新逻辑 ---
+    # 这个方法会在ABR的循环中被调用
+    def _logic_q_learning(self):
+        current_s = self._get_current_q_state() # 获取当前离散化状态 (s)
+        
+        # 1. 根据epsilon-greedy策略选择动作 (a)
+        if random.uniform(0, 1) < self.epsilon:
+            action_index = random.randint(0, self.num_quality_levels - 1) # 探索：随机选择一个质量等级
+            logger.info(f"Q-LEARNING: Exploring action: {action_index}")
+        else:
+            # 利用：选择当前状态下Q值最大的动作
+            # Q表维度: (bw_idx, buf_idx, current_quality_idx, action_quality_idx)
+            action_index = np.argmax(self.q_table[current_s[0], current_s[1], current_s[2], :])
+            logger.info(f"Q-LEARNING: Exploiting action: {action_index} (Q-values: {self.q_table[current_s[0], current_s[1], current_s[2], :]})")
 
-    def abr_loop(self): # 和你之前的一样
+        # 选定的动作 (action_index) 就是下一个要请求的码率等级
+        chosen_quality_index = int(action_index)
+
+        # 2. 执行动作 (通过广播给播放器) 并获取奖励 (R) 和新状态 (s')
+        #    - 动作的执行: 广播 chosen_quality_index
+        #    - 奖励的获取: 这个比较复杂。奖励不是立即获得的。
+        #      它是在下一个分片下载完成、播放器状态更新（可能发生卡顿、质量切换完成）后才能计算。
+        #      你需要一个机制来收集这些QoE事件，并计算出一个综合奖励。
+
+        # 简化处理：我们将动作的执行（广播）和Q表的更新分离开。
+        # _logic_q_learning 负责决策 (选择动作)。
+        # 另一个方法 (例如 on_segment_played_or_stall) 将负责在收到反馈后更新Q表。
+
+        # --- 决策部分 ---
+        if chosen_quality_index != self.current_stream_index_by_abr: # 如果决策与当前设置不同
+            old_level_idx_for_log = self.current_stream_index_by_abr
+            self.current_stream_index_by_abr = chosen_quality_index # 更新 ABR 管理器想要设置的级别
+            
+            # 更新 self.last_state_action_reward 以便后续Q表更新
+            # 此时我们还不知道 Reward 和 next_state
+            # Reward 和 next_state 需要在 client.py 收集到 QoE 事件后计算和确定
+            # 然后再调用 ABRManager 的一个新方法来更新Q表
+            self.last_state_action_reward = {
+                "state": current_s, # (s)
+                "action": chosen_quality_index, # (a)
+                "timestamp": time.time() # 记录决策时间，用于后续匹配反馈
+            }
+
+            logger.info(f"Q-LEARNING DECISION: Switch from level {old_level_idx_for_log} "
+                        f"to {chosen_quality_index}. State: {current_s}")
+            self.broadcast_abr_decision(chosen_quality_index)
+        else:
+            logger.info(f"Q-LEARNING DECISION: No change from level {self.current_stream_index_by_abr}. State: {current_s}")
+            # 即使不切换，也可能需要记录状态和动作，以便在之后计算奖励并更新Q表 (如果奖励是基于持续状态的)
+            # 为简单起见，我们主要在切换时或周期性地更新Q表
+            # 如果没有切换，可以考虑不立即更新 self.last_state_action_reward，除非你的奖励机制也考虑“保持”的奖励
+
+        # 探索率衰减
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+
+
+    # --- 新增：用于在收到反馈后更新Q表的方法 ---
+    # 这个方法应该由 client.py 在收集到足够信息计算出奖励 R 和新状态 s' 后调用
+    def update_q_table_after_feedback(self, reward, next_actual_played_quality_index):
+        if self.last_state_action_reward is None:
+            logger.warning("Q-LEARNING UPDATE: last_state_action_reward is None. Cannot update Q-table.")
+            return
+
+        s = self.last_state_action_reward["state"]      # (bw_idx, buf_idx, prev_quality_idx)
+        a = self.last_state_action_reward["action"]    # chosen_quality_idx for that state
+        R = reward                                     # 计算得到的奖励
+
+        # 获取新状态 s'
+        # 新状态应该是 *执行动作 a 并获得奖励 R 之后* 的状态
+        # 这里的 next_actual_played_quality_index 是执行动作 a 后，播放器实际切换到的质量等级
+        # 我们需要用这个实际播放的质量等级，以及 *在那之后* 观察到的新带宽和缓冲区来构成 s'
+        # 这部分是最tricky的，因为状态和奖励的对应关系需要明确
+        
+        # 假设 client.py 会在计算完奖励 R 后，立即获取最新的带宽和缓冲区情况
+        # 并将 next_actual_played_quality_index 也传递过来
+        # (或者，ABRManager 自己在更新Q表前重新获取最新的离散状态作为 s_prime 的一部分)
+
+        # 重新获取执行动作a并收到奖励R后的状态 s'
+        # (这需要 client.py 协调：收集QoE -> 计算R -> 获取当前bw/buf -> 调用此方法)
+        with self._internal_lock: # 获取最新缓冲区
+            s_prime_buffer_s = self.current_player_buffer_s
+        s_prime_bw_bps = self._estimate_bandwidth_enhanced() # 获取最新带宽
+
+        s_prime_discrete_bw = self._discretize_bandwidth(s_prime_bw_bps)
+        s_prime_discrete_buf = self._discretize_buffer(s_prime_buffer_s)
+        
+        # s' 中的质量等级应该是动作 a 对应的质量等级 (即 next_actual_played_quality_index)
+        s_prime = (s_prime_discrete_bw, s_prime_discrete_buf, next_actual_played_quality_index)
+
+        logger.info(f"Q-LEARNING UPDATE: s={s}, a={a}, R={R:.2f}, s'={s_prime}")
+
+        # Q学习更新规则
+        q_predict = self.q_table[s[0], s[1], s[2], a]
+        q_target = R + self.gamma * np.max(self.q_table[s_prime[0], s_prime[1], s_prime[2], :]) # max_a' Q(s', a')
+        
+        self.q_table[s[0], s[1], s[2], a] += self.lr * (q_target - q_predict)
+        
+        logger.debug(f"Q-LEARNING UPDATE: Q-value for (s:{s}, a:{a}) changed from {q_predict:.3f} to {self.q_table[s[0], s[1], s[2], a]:.3f}")
+
+        # 更新上一个实际播放的质量，用于下一个状态S的计算
+        self.last_played_quality_index = next_actual_played_quality_index
+        self.last_state_action_reward = None # 清理，等待下一次决策
+
+    def abr_loop(self):
         logger.info(f"ABR Python Algo ({self.logic_type}) monitoring thread started.")
-        time.sleep(5) # 初始等待，让播放器先缓冲一些
+        # 初始等待时间，等播放器缓冲一些
+        # 对于Q学习，第一次决策可能需要一些初始状态信息
+        time.sleep(5) 
+        
+        if self.logic_type == self.LOGIC_TYPE_Q_LEARNING:
+            # Q学习的第一次决策可能在循环外或循环内处理
+            # 确保 self.last_played_quality_index 初始化正确
+            self.last_played_quality_index = self.current_stream_index_by_abr # 假设初始播放的是这个
+
         while not self.stop_abr_event.is_set():
             try:
-                self._abr_decision_logic() # 调用主分发方法
+                self._abr_decision_logic()
             except Exception as e:
                 logger.error(f"Error in ABR decision loop ({self.logic_type}): {e}", exc_info=True)
             
-            # 决策频率 (例如3秒)
-            # 更频繁的决策可能导致振荡，太慢则响应不及时
-            sleep_interval = 3.0 
-            for _ in range(int(sleep_interval)): # 允许更早地被stop_event打断
+            sleep_interval = 3.0 # 决策频率
+            for _ in range(int(sleep_interval)):
                 if self.stop_abr_event.is_set(): break
                 time.sleep(1)
+        
+        if self.logic_type == self.LOGIC_TYPE_Q_LEARNING:
+            self._save_q_table() # 训练结束时保存Q表
+
         logger.info(f"ABR Python Algo ({self.logic_type}) monitoring thread stopped.")
+
 
     def start(self): # 和你之前的一样
         self.stop_abr_event.clear()

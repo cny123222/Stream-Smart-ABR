@@ -73,8 +73,18 @@ async def handle_websocket_client(websocket):
                         qoe_manager.record_startup_latency(event_data.get("value"), timestamp)
                     elif event_name == "REBUFFERING_START":
                         qoe_manager.record_rebuffering_start(timestamp)
+                    # (在处理 "REBUFFERING_END" 事件的部分)
                     elif event_name == "REBUFFERING_END":
                         qoe_manager.record_rebuffering_end(event_data.get("duration"), timestamp)
+                        # 当卡顿结束时，我们通常已经通过 QUALITY_SWITCH 后的逻辑来更新Q表并计算了包含卡顿的惩罚。
+                        # 如果你的设计是卡顿发生时立即给予一个独立的惩罚，并更新Q表，那么这里的逻辑会复杂，
+                        # 因为你需要确保不会对同一次卡顿进行多次惩罚或错误归因。
+                        # 当前的设计是在QUALITY_SWITCH后回顾上一个决策周期内的总体表现（包括卡顿）。
+                        # 因此，在REBUFFERING_END这里，我们主要依赖qoe_manager记录事件，
+                        # 具体的惩罚计算留给QUALITY_SWITCH后的评估。
+                        logger.info(f"QoE Event: Rebuffering ended. Duration: {event_data.get('duration')}ms. "
+                                    f"Q-Learning penalty for this will be assessed at the end of the decision cycle (e.g., on QUALITY_SWITCH).")
+
                     elif event_name == "QUALITY_SWITCH":
                         qoe_manager.record_quality_switch(
                             event_data.get("fromLevel"),
@@ -82,6 +92,51 @@ async def handle_websocket_client(websocket):
                             event_data.get("toBitrate"),
                             timestamp
                         )
+                        if ABRManager.instance and ABRManager.instance.logic_type == ABRManager.LOGIC_TYPE_Q_LEARNING:
+                            if ABRManager.instance.last_state_action_reward is not None:
+                                # --- 计算奖励 R ---
+                                chosen_action = ABRManager.instance.last_state_action_reward["action"]
+                                bitrate_reward = 0
+                                if 0 <= chosen_action < len(ABRManager.instance.available_streams): # 安全检查
+                                    bitrate_reward = ABRManager.instance.available_streams[chosen_action].get('bandwidth', 0) / 1e6 # Mbps
+                                
+                                stall_penalty = 0
+                                decision_timestamp = ABRManager.instance.last_state_action_reward.get("timestamp", 0)
+                                if decision_timestamp > 0:
+                                    # --- 使用新的方法获取卡顿时长 ---
+                                    stall_duration_this_cycle_s = qoe_manager.get_stall_duration_since(decision_timestamp * 1000) # 转换为毫秒时间戳
+                                    # ---
+                                    # 你需要定义一个合适的卡顿惩罚权重
+                                    STALL_PENALTY_WEIGHT = 5.0 # 例如，每秒卡顿惩罚5分
+                                    stall_penalty = STALL_PENALTY_WEIGHT * stall_duration_this_cycle_s
+                                    if stall_duration_this_cycle_s > 0:
+                                        logger.info(f"Q-Learning Reward: Stall penalty this cycle: {stall_penalty:.2f} (duration: {stall_duration_this_cycle_s:.2f}s)")
+                                else:
+                                    logger.warning("Q-Learning Reward: Decision timestamp not found for stall calculation.")
+
+
+                                switch_penalty = 0
+                                from_level = event_data.get("fromLevel")
+                                to_level = event_data.get("toLevel")
+                                if from_level != -1 and from_level != to_level:
+                                    # 你需要定义一个合适的切换惩罚权重
+                                    SWITCH_PENALTY_WEIGHT = 1.0 # 例如，每次切换固定惩罚1分
+                                    switch_penalty = SWITCH_PENALTY_WEIGHT
+                                    logger.info(f"Q-Learning Reward: Switch penalty: {switch_penalty:.2f}")
+                                
+                                reward = bitrate_reward - stall_penalty - switch_penalty
+                                logger.info(f"Q-Learning Reward: Calculated reward = {reward:.2f} (Bitrate: {bitrate_reward:.2f}, Stall Penalty: {stall_penalty:.2f}, Switch Penalty: {switch_penalty:.2f})")
+                                # --- 奖励计算结束 ---
+
+                                next_actual_played_quality_index = event_data.get("toLevel")
+                                ABRManager.instance.update_q_table_after_feedback(reward, next_actual_played_quality_index)
+                            
+                            else: # last_state_action_reward is None
+                                # 如果是第一次切换 (例如初始播放)，可能没有 last_state_action_reward
+                                # 此时可以更新 ABRManager 内部的 last_played_quality_index，但不更新Q表
+                                if ABRManager.instance: # 再次检查以防万一
+                                     ABRManager.instance.last_played_quality_index = event_data.get("toLevel")
+                                     logger.info(f"Q-Learning: Initial quality switch to level {event_data.get('toLevel')}. No Q-table update yet.")
                     elif event_name == "PLAYBACK_ENDED":
                         qoe_manager.log_playback_session_end(timestamp)
                     elif event_name == "BUFFER_UPDATE":
@@ -498,13 +553,14 @@ def main():
     if available_streams:
         # --- 选择你想要的决策逻辑 ---
         # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
-        selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+        # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
         # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
+        selected_logic = ABRManager.LOGIC_TYPE_Q_LEARNING # 选择 Q-Learning 逻辑
 
         abr_manager_instance = ABRManager(
             available_streams,
             broadcast_abr_decision_callback=schedule_abr_broadcast,
-            logic_type=selected_logic # <--- 在这里传递
+            logic_type=selected_logic
         )
         abr_manager_instance.start()
     else:
@@ -512,11 +568,14 @@ def main():
 
     # --- Initialize and start the network scenario player ---
     logger.info("MAIN: Initializing and starting network scenario player...")
-    scenario_player = network_simulator.create_default_simulation_scenario()
+    # scenario_player = network_simulator.create_default_simulation_scenario()
     # Or, define a custom scenario:
-    # scenario_player = network_simulator.NetworkScenarioPlayer()
-    # scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10s full speed
-    # scenario_player.add_step(duration_seconds=20, bandwidth_bps=1_000_000) # 20s at 1 Mbps
+    scenario_player = network_simulator.NetworkScenarioPlayer()
+    scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10s full speed
+    scenario_player.add_step(duration_seconds=20, bandwidth_bps=2_000_000) # 20s at 2 Mbps
+    scenario_player.add_step(duration_seconds=20, bandwidth_bps=1_000_000) # 20s at 1 Mbps
+    scenario_player.add_step(duration_seconds=20, bandwidth_bps=5_000_000) # 20s at 5 Mbps
+    scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10s at full speed
     # ...
     scenario_player.start()
 

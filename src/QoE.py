@@ -82,6 +82,21 @@ class QoEMetricsManager:
         
         self.current_level_index = to_level_index
 
+    def get_stall_duration_since(self, from_timestamp_ms: float) -> float:
+        """
+        计算从 from_timestamp_ms 之后开始的所有卡顿事件的总时长。
+        返回以秒为单位的总卡顿时长。
+        """
+        total_stall_duration_ms = 0.0
+        for event in self.rebuffering_events:
+            # 我们关心的是那些在 from_timestamp_ms 之后开始的卡顿
+            # 并且它们确实记录了有效的时长 (duration_ms > 0)
+            # event['end_ts'] 也会被 record_rebuffering_end 更新
+            if event['start_ts'] >= from_timestamp_ms and event['duration_ms'] > 0:
+                total_stall_duration_ms += event['duration_ms']
+        
+        logger.debug(f"QoE: Calculated total stall duration since {from_timestamp_ms} as {total_stall_duration_ms} ms")
+        return total_stall_duration_ms / 1000.0  # 转换为秒
 
     def log_playback_session_end(self, timestamp_ms=None, available_abr_streams=None):
         if not self.session_active:
