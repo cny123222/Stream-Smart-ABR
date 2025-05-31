@@ -4,114 +4,129 @@
     <title>Stream Smart ABR - SJTU CS3611</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
-        :root { /* CSS Variables for easy theming */
-            --primary-text-color: #333;
-            --secondary-text-color: #555;
-            --background-color: #f0f2f5; /* Slightly different shade of grey */
-            --container-background: #ffffff;
-            --border-color: #e0e0e0;
-            --shadow-color: rgba(0,0,0,0.1);
-            --accent-color: #007bff; /* Example accent color (blue) */
-            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        :root {
+            --primary-text-color: #2c3e50;  /* 深蓝灰色 - 用于主要文本 */
+            --secondary-text-color: #34495e; /* 较浅的蓝灰色 - 用于副标题和标签 */
+            --accent-color: #3498db;      /* 鲜明的蓝色 - 用于高亮和链接 */
+            --background-color: #ecf0f1;  /* 非常浅的灰色 - 页面背景 */
+            --container-background: #ffffff; /* 白色 - 面板背景 */
+            --panel-border-color: #bdc3c7;   /* 浅灰色 - 面板边框 */
+            --shadow-color: rgba(0, 0, 0, 0.08); /* 更柔和的阴影 */
+            --success-color: #2ecc71;     /* 绿色 - 用于成功状态 */
+            --error-color: #e74c3c;       /* 红色 - 用于错误状态 */
+            --font-family: 'Roboto', sans-serif; /* 使用Roboto字体 */
+            --base-font-size: 16px;
+            --border-radius: 8px; /* 更大的圆角 */
         }
 
         body {
             font-family: var(--font-family);
-            margin: 0; /* Remove default margin */
+            font-size: var(--base-font-size);
+            margin: 0;
             background-color: var(--background-color);
             color: var(--primary-text-color);
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 20px;
-            min-height: 100vh; /* Ensure body takes at least full viewport height */
+            padding: 25px; /* 增加页面内边距 */
+            min-height: 100vh;
             box-sizing: border-box;
+            line-height: 1.6; /* 改善可读性 */
         }
 
         .header-section {
             text-align: center;
-            margin-bottom: 30px; /* Space between header and main content */
+            margin-bottom: 10px; /* 增加标题和下方内容的间距 */
+            padding: 10px;
         }
 
         .main-title {
-            font-size: 1.8em; /* Slightly larger title */
-            font-weight: 600; /* Bold for emphasis */
-            color: var(--primary-text-color);
-            margin: 0;
+            color: var(--primary-text-color); /* 使用主题色 */
+            font-size: 2.5em; /* 调整大小 */
+            font-weight: 700; /* 标题更粗一些 */
+            margin-bottom: 8px;
+            letter-spacing: -0.5px; /* 轻微调整字间距 */
         }
 
-        .main-container { /* New wrapper for centering content */
+        .course-project-subtitle {
+            color: var(--secondary-text-color);
+            font-size: 1.2em;
+            font-weight: 300; /* 轻量级字体 */
+            margin-top: 0;
+            margin-bottom: 25px;
+        }
+
+        .main-container {
             width: 100%;
-            max-width: 850px; /* Slightly wider for more content */
+            max-width: 950px; /* 可以适当加宽 */
             display: flex;
             flex-direction: column;
-            gap: 20px; /* Space between video container and info panels */
-        }
-
-        h1 {
-            text-align: center;
-            color: var(--secondary-text-color);
-            margin-bottom: 25px;
-            font-size: 2em; /* Larger title */
-            font-weight: 300; /* Lighter font weight for a modern look */
+            gap: 25px; /* 面板间距 */
         }
 
         #videoContainer {
-            background-color: #000; /* Keep video background black */
-            box-shadow: 0 4px 15px var(--shadow-color); /* Softer, more spread shadow */
-            border-radius: 8px; /* Rounded corners */
-            overflow: hidden; /* Ensure video stays within rounded corners */
+            background-color: #000;
+            box-shadow: 0 5px 20px var(--shadow-color); /* 调整阴影 */
+            border-radius: var(--border-radius);
+            overflow: hidden;
             width: 100%;
+            border: 1px solid var(--panel-border-color); /* 给视频容器也加上边框 */
         }
 
         video {
             width: 100%;
-            display: block; /* Remove extra space below video element */
-            border-radius: 8px; /* Match container */
+            display: block;
+            border-radius: var(--border-radius);
         }
 
-        .info-panels-container { /* New container for side-by-side info panels */
+        .info-panels-container {
             display: flex;
-            flex-wrap: wrap; /* Allow wrapping on smaller screens */
-            gap: 20px; /* Space between panels */
+            flex-wrap: wrap;
+            gap: 25px;
             width: 100%;
         }
 
         .panel {
             background-color: var(--container-background);
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px var(--shadow-color);
-            flex-grow: 1; /* Allow panels to grow */
-            min-width: 300px; /* Minimum width before wrapping */
+            padding: 25px; /* 增加面板内边距 */
+            border-radius: var(--border-radius);
+            box-shadow: 0 3px 10px var(--shadow-color);
+            flex: 1 1 300px; /* 允许面板在空间足够时增长，基础宽度300px，允许换行 */
             box-sizing: border-box;
+            border: 1px solid var(--panel-border-color); /* 给面板加上边框 */
         }
 
         .panel h2 {
             margin-top: 0;
-            font-size: 1.2em;
-            color: var(--secondary-text-color);
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 10px;
-            margin-bottom: 15px;
+            font-size: 1.5em; /* 调整面板标题大小 */
+            font-weight: 500; /* 中等粗细 */
+            color: var(--primary-text-color);
+            border-bottom: 1px solid #e7e7e7; /* 更细的分割线 */
+            padding-bottom: 12px;
+            margin-bottom: 18px;
         }
 
         .panel p {
-            margin: 8px 0;
-            font-size: 0.95em;
-            line-height: 1.6;
+            margin: 10px 0; /* 调整段落间距 */
+            font-size: 1.2em;
         }
 
         .panel .label {
-            font-weight: 600;
-            color: #444;
+            font-weight: 500; /* 标签也用中等粗细 */
+            color: var(--secondary-text-color);
+            margin-right: 8px; /* 标签和值之间的间距 */
         }
 
         .panel .value {
             color: var(--accent-color);
-            font-weight: 500;
-            word-break: break-all; /* Prevent long URLs from breaking layout */
+            font-weight: 400; /* 值的字重可以普通一些 */
+            word-break: break-all;
         }
+
+        /* 状态相关的特定颜色 */
+        .status-good { color: var(--success-color); }
+        .status-bad { color: var(--error-color); }
+        .status-neutral { color: var(--secondary-text-color); }
 
         /* For smaller screens, stack panels */
         @media (max-width: 768px) {
@@ -124,10 +139,24 @@
         }
 
         .footer-credits {
-            margin-top: 30px;
+            margin-top: 25px; /* 与上方内容隔开更多距离 */
+            padding: 25px;
             text-align: center;
-            font-size: 0.9em;
-            color: var(--secondary-text-color);
+            font-size: 1.3em;
+            color: #7f8c8d; /* 页脚文字颜色 */
+            width: 100%;
+            max-width: 900px;
+            border-top: 1px solid #dadce0; /* 更现代的分割线颜色 */
+            background-color: var(--container-background); /* 页脚也可以有背景 */
+            box-shadow: 0 -2px 5px var(--shadow-color); /* 页脚上方的轻微阴影 */
+            border-radius: var(--border-radius) var(--border-radius) 0 0; /* 页脚顶部圆角 */
+        }
+
+        .footer-credits p {
+            margin: 6px 0;
+        }
+        .footer-credits .team-lead { /* 示例：可以给队长加个标记或不同样式 */
+            font-weight: 500;
         }
 
     </style>
