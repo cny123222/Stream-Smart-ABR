@@ -5,18 +5,18 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
         :root {
-            --primary-text-color: #2c3e50;   /* Deep grayish blue - for main text */
-            --secondary-text-color: #34495e; /* Lighter grayish blue - for subtitles and labels */
-            --accent-color: #3498db;       /* Bright blue - for highlights and links */
-            --background-color: #ecf0f1;   /* Very light gray - page background */
-            --container-background: #ffffff; /* White - panel background */
-            --panel-border-color: #bdc3c7;    /* Light gray - panel borders */
-            --shadow-color: rgba(0, 0, 0, 0.08); /* Softer shadow */
-            --success-color: #2ecc71;      /* Green - for success states */
-            --error-color: #e74c3c;        /* Red - for error states */
-            --font-family: 'Roboto', sans-serif; /* Using Roboto font */
+            --primary-text-color: #2c3e50;  /* 深蓝灰色 - 用于主要文本 */
+            --secondary-text-color: #34495e; /* 较浅的蓝灰色 - 用于副标题和标签 */
+            --accent-color: #3498db;      /* 鲜明的蓝色 - 用于高亮和链接 */
+            --background-color: #ecf0f1;  /* 非常浅的灰色 - 页面背景 */
+            --container-background: #ffffff; /* 白色 - 面板背景 */
+            --panel-border-color: #bdc3c7;   /* 浅灰色 - 面板边框 */
+            --shadow-color: rgba(0, 0, 0, 0.08); /* 更柔和的阴影 */
+            --success-color: #2ecc71;     /* 绿色 - 用于成功状态 */
+            --error-color: #e74c3c;       /* 红色 - 用于错误状态 */
+            --font-family: 'Roboto', sans-serif; /* 使用Roboto字体 */
             --base-font-size: 16px;
-            --border-radius: 8px;          /* Larger rounded corners */
+            --border-radius: 8px; /* 更大的圆角 */
         }
 
         body {
@@ -28,49 +28,49 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 25px; /* Increased page padding */
+            padding: 25px; /* 增加页面内边距 */
             min-height: 100vh;
             box-sizing: border-box;
-            line-height: 1.6; /* Improved readability */
+            line-height: 1.6; /* 改善可读性 */
         }
 
         .header-section {
             text-align: center;
-            margin-bottom: 10px; /* Spacing between title and content below */
+            margin-bottom: 10px; /* 增加标题和下方内容的间距 */
             padding: 10px;
         }
 
         .main-title {
-            color: var(--primary-text-color);
-            font-size: 2.5em;
-            font-weight: 700;
+            color: var(--primary-text-color); /* 使用主题色 */
+            font-size: 2.5em; /* 调整大小 */
+            font-weight: 700; /* 标题更粗一些 */
             margin-bottom: 8px;
-            letter-spacing: -0.5px;
+            letter-spacing: -0.5px; /* 轻微调整字间距 */
         }
 
         .course-project-subtitle {
             color: var(--secondary-text-color);
             font-size: 1.2em;
-            font-weight: 300;
+            font-weight: 300; /* 轻量级字体 */
             margin-top: 0;
             margin-bottom: 25px;
         }
 
         .main-container {
             width: 100%;
-            max-width: 950px; /* Slightly wider main content area */
+            max-width: 950px; /* 可以适当加宽 */
             display: flex;
             flex-direction: column;
-            gap: 25px; /* Gap between video container and info panels */
+            gap: 25px; /* 面板间距 */
         }
 
         #videoContainer {
             background-color: #000;
-            box-shadow: 0 5px 20px var(--shadow-color);
+            box-shadow: 0 5px 20px var(--shadow-color); /* 调整阴影 */
             border-radius: var(--border-radius);
             overflow: hidden;
             width: 100%;
-            border: 1px solid var(--panel-border-color); /* Added border to video container */
+            border: 1px solid var(--panel-border-color); /* 给视频容器也加上边框 */
         }
 
         video {
@@ -88,47 +88,47 @@
 
         .panel {
             background-color: var(--container-background);
-            padding: 25px; /* Increased panel padding */
+            padding: 25px; /* 增加面板内边距 */
             border-radius: var(--border-radius);
             box-shadow: 0 3px 10px var(--shadow-color);
-            flex: 1 1 300px; /* Panels grow, base width 300px, allow wrapping */
+            flex: 1 1 300px; /* 允许面板在空间足够时增长，基础宽度300px，允许换行 */
             box-sizing: border-box;
-            border: 1px solid var(--panel-border-color); /* Added border to panels */
+            border: 1px solid var(--panel-border-color); /* 给面板加上边框 */
         }
 
         .panel h2 {
             margin-top: 0;
-            font-size: 1.5em; /* Adjusted panel title size */
-            font-weight: 500;
+            font-size: 1.5em; /* 调整面板标题大小 */
+            font-weight: 500; /* 中等粗细 */
             color: var(--primary-text-color);
-            border-bottom: 1px solid #e7e7e7; /* Thinner separator line */
+            border-bottom: 1px solid #e7e7e7; /* 更细的分割线 */
             padding-bottom: 12px;
             margin-bottom: 18px;
         }
 
         .panel p {
-            margin: 10px 0; /* Adjusted paragraph spacing */
+            margin: 10px 0; /* 调整段落间距 */
             font-size: 1.2em;
         }
 
         .panel .label {
-            font-weight: 500;
+            font-weight: 500; /* 标签也用中等粗细 */
             color: var(--secondary-text-color);
-            margin-right: 8px; /* Space between label and value */
+            margin-right: 8px; /* 标签和值之间的间距 */
         }
 
         .panel .value {
             color: var(--accent-color);
-            font-weight: 400;
+            font-weight: 400; /* 值的字重可以普通一些 */
             word-break: break-all;
         }
 
-        /* Status-specific colors */
+        /* 状态相关的特定颜色 */
         .status-good { color: var(--success-color); }
         .status-bad { color: var(--error-color); }
         .status-neutral { color: var(--secondary-text-color); }
 
-        /* Responsive stacking for smaller screens */
+        /* For smaller screens, stack panels */
         @media (max-width: 768px) {
             .info-panels-container {
                 flex-direction: column;
@@ -139,23 +139,23 @@
         }
 
         .footer-credits {
-            margin-top: 25px; /* Increased spacing above footer */
+            margin-top: 25px; /* 与上方内容隔开更多距离 */
             padding: 25px;
             text-align: center;
             font-size: 1.3em;
-            color: #7f8c8d; /* Footer text color */
+            color: #7f8c8d; /* 页脚文字颜色 */
             width: 100%;
             max-width: 900px;
-            border-top: 1px solid #dadce0; /* Modern separator line color */
-            background-color: var(--container-background); /* Footer can have a background */
-            box-shadow: 0 -2px 5px var(--shadow-color); /* Slight shadow above footer */
-            border-radius: var(--border-radius) var(--border-radius) 0 0; /* Rounded top corners for footer */
+            border-top: 1px solid #dadce0; /* 更现代的分割线颜色 */
+            background-color: var(--container-background); /* 页脚也可以有背景 */
+            box-shadow: 0 -2px 5px var(--shadow-color); /* 页脚上方的轻微阴影 */
+            border-radius: var(--border-radius) var(--border-radius) 0 0; /* 页脚顶部圆角 */
         }
 
         .footer-credits p {
             margin: 6px 0;
         }
-        .footer-credits .team-lead { /* Example: style for team lead */
+        .footer-credits .team-lead { /* 示例：可以给队长加个标记或不同样式 */
             font-weight: 500;
         }
 
@@ -173,21 +173,17 @@
         </div>
 
         <div class="info-panels-container">
-            <div class="panel" id="playbackInfoPanel">
-                <h2>Current Stream Info</h2>
-                <p><span class="label">Video Name:</span> <span id="videoNameSpan" class="value">Loading...</span></p>
-                <p><span class="label">Current Segment:</span> <span id="currentSegmentSpan" class="value">-</span></p>
+            <div class="panel" id="playbackInfoPanel"> <h2>Current Stream Info</h2>
+                <p><span class="label">Video Name:</span> <span id="videoNameSpan" class="value">Loading...</span></p> <p><span class="label">Current Segment:</span> <span id="currentSegmentSpan" class="value">-</span></p>
                 <p><span class="label">Displayed Quality:</span> <span id="displayedQualitySpan" class="value">-</span></p>
                 <p><span class="label">Loading Quality:</span> <span id="loadedQualitySpan" class="value">-</span></p>
             </div>
 
-            <div class="panel" id="networkQoePanel">
-                <h2>Performance Metrics</h2>
+            <div class="panel" id="networkQoePanel"> <h2>Performance Metrics</h2>
                 <p><span class="label">Buffer Level:</span> <span id="bufferLevelSpan" class="value">- s</span></p>
                 <p><span class="label">Network Simulator:</span> <span id="networkSimStatusSpan" class="value">N/A</span></p>
-                <p><span class="label">Estimated Bandwidth:</span> <span id="estimatedAbrBwSpan" class="value">N/A</span></p>
-                <p><span class="label">Total Rebuffering:</span> <span id="rebufferingCountSpan" class="value">0 events</span>, <span id="rebufferingDurationSpan" class="value">0 ms</span></p>
-            </div>
+                <p><span class="label">Estimated Bandwidth:</span> <span id="estimatedAbrBwSpan" class="value">N/A</span></p> <p><span class="label">Total Rebuffering:</span> <span id="rebufferingCountSpan" class="value">0 events</span>, <span id="rebufferingDurationSpan" class="value">0 ms</span></p>
+                </div>
         </div>
     </div>
 
@@ -197,25 +193,15 @@
     </div>
 
     <script>
-        /**
-         * Initializes the HLS.js player, sets up WebSocket communication for ABR control and QoE reporting,
-         * and attaches event listeners to track and display playback metrics.
-         */
         document.addEventListener('DOMContentLoaded', function () {
-            // DOM element references
             const video = document.getElementById('videoPlayer');
-            
-            // Placeholders to be dynamically replaced by the Python backend when serving this HTML file.
-            // These define the URLs for fetching video manifests and establishing WebSocket connections.
             const videoToStreamName = "{VIDEO_TO_STREAM_NAME}";
             const localProxyHost = "{LOCAL_PROXY_HOST}";
             const localProxyPort = "{LOCAL_PROXY_PORT}";
             const websocketPort = "{WEBSOCKET_PORT}";
 
-            // Construct the URL for the master M3U8 playlist.
             const masterM3u8Url = `http://${localProxyHost}:${localProxyPort}/${videoToStreamName}/master.m3u8`;
 
-            // References to HTML span elements used for displaying dynamic information on the page.
             const videoNameSpan = document.getElementById('videoNameSpan');
             const currentSegmentSpan = document.getElementById('currentSegmentSpan');
             const loadedQualitySpan = document.getElementById('loadedQualitySpan');
@@ -226,79 +212,54 @@
             const rebufferingCountSpan = document.getElementById('rebufferingCountSpan');
             const rebufferingDurationSpan = document.getElementById('rebufferingDurationSpan');
 
-            let hlsInstance = null; // Will hold the HLS.js player instance.
-            const ws = new WebSocket(`ws://${localProxyHost}:${websocketPort}`); // Establishes WebSocket connection.
+            let hlsInstance = null;
+            const ws = new WebSocket(`ws://${localProxyHost}:${websocketPort}`);
 
-            // Display the video name on the page once the DOM is ready.
             if (videoNameSpan) {
                 videoNameSpan.textContent = videoToStreamName;
             }
 
-            // Variables for accumulating QoE metrics.
             let totalRebufferingEvents = 0;
             let totalRebufferingDurationMs = 0;
 
-            /**
-             * Sends QoE (Quality of Experience) event data to the Python backend via WebSocket.
-             * Ensures a timestamp is added to the event data if not already present.
-             * @param {object} eventData - The QoE event data object.
-             * @param {string} eventData.event - The name of the QoE event (e.g., "STARTUP_LATENCY").
-             * @param {*} [eventData.value] - Optional value associated with the event.
-             * @param {number} [eventData.timestamp] - Optional timestamp; defaults to Date.now().
-             */
-            function sendQoeEvent(eventData) {
+            function sendQoeEvent(eventData) { //
                 if (ws.readyState === WebSocket.OPEN) {
                     if (!eventData.timestamp) {
                         eventData.timestamp = Date.now();
                     }
                     ws.send(JSON.stringify({ type: "QOE_EVENT", data: eventData }));
                 } else {
-                    // Log a warning if WebSocket is not open when trying to send an event.
                     console.warn("WebSocket not open, QoE event not sent:", eventData);
                 }
             }
 
-            // WebSocket event handlers
-            ws.onopen = function() {
+            ws.onopen = function() { //
                 console.log("WebSocket connection established.");
-                // Any UI updates for WebSocket connection status could go here if needed.
             };
-            ws.onclose = function() {
+            ws.onclose = function() { //
                 console.log("WebSocket connection closed.");
             };
-            ws.onerror = function(error) {
+            ws.onerror = function(error) { //
                 console.error("WebSocket error:", error);
             };
-
-            /**
-             * Handles messages received from the WebSocket server.
-             * This includes ABR commands (SET_LEVEL) and status updates (NETWORK_SIM_UPDATE, ABR_BW_ESTIMATE_UPDATE).
-             * @param {MessageEvent} event - The WebSocket message event.
-             */
-            ws.onmessage = function(event) {
+            ws.onmessage = function(event) { //
                 try {
                     const message = JSON.parse(event.data);
-                    // Handles SET_LEVEL command from Python ABR to instruct HLS.js to switch quality levels.
                     if (message.type === "SET_LEVEL" && hlsInstance) {
                         const newLevelIndex = parseInt(message.levelIndex);
-                        // Validate the received level index.
                         if (hlsInstance.levels && newLevelIndex >= 0 && newLevelIndex < hlsInstance.levels.length) {
-                            // Set HLS.js's nextLevel property to trigger a quality switch.
-                            // Only set if it's different from the current target to avoid redundant operations.
                             if (hlsInstance.nextLevel !== newLevelIndex) {
                                 console.log(`Python ABR COMMAND: Set hlsInstance.nextLevel to: ${newLevelIndex}`);
                                 hlsInstance.nextLevel = newLevelIndex;
-                                // Update UI to show the quality level Python ABR is targeting.
-                                if (loadedQualitySpan && hlsInstance.levels[newLevelIndex]) { 
+                                if (loadedQualitySpan && hlsInstance.levels[newLevelIndex]) { // 安全检查
                                     loadedQualitySpan.textContent = `${hlsInstance.levels[newLevelIndex].height}p @ ${(hlsInstance.levels[newLevelIndex].bitrate / 1000).toFixed(0)} kbps`;
                                 }
                             }
                         } else {
                             console.warn(`Python ABR COMMAND: Invalid levelIndex ${newLevelIndex} or hlsInstance.levels not ready.`);
                         }
-                    // Handles network simulator status updates from Python.
-                    } else if (message.type === "NETWORK_SIM_UPDATE") { 
-                        if (networkSimStatusSpan) { 
+                    } else if (message.type === "NETWORK_SIM_UPDATE") { //
+                        if (networkSimStatusSpan) { // 安全检查
                             if (message.data && typeof message.data.bandwidth_Mbps === 'number') {
                                 networkSimStatusSpan.textContent = `${message.data.bandwidth_Mbps.toFixed(2)} Mbps`;
                             } else if (message.data && message.data.status === 'Full Speed') {
@@ -307,9 +268,8 @@
                                 networkSimStatusSpan.textContent = "N/A";
                             }
                         }
-                    // Handles Python ABR's estimated bandwidth updates.
-                    } else if (message.type === "ABR_BW_ESTIMATE_UPDATE") { 
-                        if (estimatedAbrBwSpan && message.data && typeof message.data.estimated_Mbps === 'number') { 
+                    } else if (message.type === "ABR_BW_ESTIMATE_UPDATE") { // 新增：处理Python ABR估算的带宽更新
+                        if (estimatedAbrBwSpan && message.data && typeof message.data.estimated_Mbps === 'number') { // 安全检查
                             estimatedAbrBwSpan.textContent = `${message.data.estimated_Mbps.toFixed(2)} Mbps`;
                         } else if (estimatedAbrBwSpan) {
                             estimatedAbrBwSpan.textContent = "N/A";
@@ -318,238 +278,171 @@
                 } catch (e) { console.error("Error processing message from WebSocket:", e); }
             };
 
-            // --- QoE Event Tracking Variables & Logic ---
-            let playInitiatedTimestamp = 0;   // Timestamp for when video playout is first initiated.
-            let isFirstPlaySignal = true;     // Flag to ensure startup latency is measured only once.
-            let isRebuffering = false;        // State flag indicating if rebuffering is currently occurring.
-            let rebufferingStartTime = 0;     // Timestamp for when the current rebuffering event started.
-            let jsPreviousLevel = -1;         // Stores the last known HLS.js quality level index for QoE reporting.
+            let playInitiatedTimestamp = 0; //
+            let isFirstPlaySignal = true;  //
+            let isRebuffering = false; //
+            let rebufferingStartTime = 0; //
+            let jsPreviousLevel = -1; //
 
-            // Intercept the video.play() method to accurately capture the play initiation time,
-            // especially for cases like autoplay or manual play before HLS.js is fully ready.
-            const originalVideoPlay = video.play;
-            video.play = function(...args) {
-                if (isFirstPlaySignal && playInitiatedTimestamp === 0) { 
+            const originalVideoPlay = video.play; //
+            video.play = function(...args) { //
+                if (isFirstPlaySignal && playInitiatedTimestamp === 0) { // Modified from your "good" version, was just `isFirstPlaySignal`
                     playInitiatedTimestamp = Date.now();
-                    console.log("QoE JS: Play initiation (manual video.play or autoplay detected) timestamped at", playInitiatedTimestamp);
+                    console.log("QoE JS: Play initiation (manual video.play) timestamped at", playInitiatedTimestamp);
                 }
                 return originalVideoPlay.apply(this, args);
             };
 
-            // Video Element Event Listener: 'playing'
-            // Fired when playback starts for the first time, or resumes after pausing or rebuffering.
-            video.addEventListener('playing', function() {
+            video.addEventListener('playing', function() { //
                 const currentEventTime = Date.now();
-                // Calculate and report startup latency on the very first 'playing' event.
                 if (isFirstPlaySignal && playInitiatedTimestamp > 0) {
                     const startupLatency = currentEventTime - playInitiatedTimestamp;
                     console.log(`QoE JS: Startup Latency = ${startupLatency} ms`);
                     sendQoeEvent({ event: "STARTUP_LATENCY", value: startupLatency, timestamp: currentEventTime });
-                    // startupLatencySpan was removed from UI, so no update here.
-                    isFirstPlaySignal = false; // Ensure startup latency is reported only once.
+                    startupLatencySpan.textContent = `${startupLatency} ms`;
+                    isFirstPlaySignal = false;
                 }
-                // If playback resumes after a rebuffering event, log and report the rebuffering duration.
                 if (isRebuffering) {
-                    isRebuffering = false; // Reset rebuffering state
+                    isRebuffering = false;
                     const rebufferingDuration = currentEventTime - rebufferingStartTime;
-                    totalRebufferingDurationMs += rebufferingDuration; // Accumulate total duration
+                    totalRebufferingDurationMs += rebufferingDuration;
                     console.log(`QoE JS: Rebuffering ended. Duration = ${rebufferingDuration} ms`);
                     sendQoeEvent({ event: "REBUFFERING_END", duration: rebufferingDuration, timestamp: currentEventTime });
-                    if(rebufferingDurationSpan) rebufferingDurationSpan.textContent = `${totalRebufferingDurationMs} ms`;
+                    rebufferingDurationSpan.textContent = `${totalRebufferingDurationMs} ms`;
                 }
             });
 
-            // Video Element Event Listener: 'waiting'
-            // Fired when playback stops due to lack of data (rebuffering).
-            video.addEventListener('waiting', function() {
+            video.addEventListener('waiting', function() { //
                 const currentEventTime = Date.now();
-                // Check conditions to ensure it's a genuine rebuffering event
-                // (not at the very start, not paused by user, not at the end of video).
                 if (!isFirstPlaySignal && video.currentTime > 0 && !video.paused && !video.ended) {
-                    if (!isRebuffering) { // Only start a new rebuffering event if not already in one
+                    if (!isRebuffering) {
                         isRebuffering = true;
                         rebufferingStartTime = currentEventTime;
-                        totalRebufferingEvents++; // Increment rebuffering count
+                        totalRebufferingEvents++;
                         console.log("QoE JS: Rebuffering started");
                         sendQoeEvent({ event: "REBUFFERING_START", timestamp: rebufferingStartTime });
-                        if(rebufferingCountSpan) rebufferingCountSpan.textContent = `${totalRebufferingEvents} events`;
+                        rebufferingCountSpan.textContent = `${totalRebufferingEvents} events`;
                     }
                 }
             });
             
-            // Video Element Event Listener: 'ended'
-            // Fired when video playback reaches the end.
-            video.addEventListener('ended', function() {
+            video.addEventListener('ended', function() { //
                 console.log("QoE JS: Playback naturally ended.");
                 sendQoeEvent({ event: "PLAYBACK_ENDED", timestamp: Date.now() });
-                stopBufferMonitoring(); // Stop buffer monitoring when playback ends.
+                stopBufferMonitoring();
             });
 
-            // Window Event Listener: 'beforeunload'
-            // Fired when the window is about to be closed or navigated away from.
-            window.addEventListener('beforeunload', function() {
+            window.addEventListener('beforeunload', function() { //
                 console.log("QoE JS: Window closing, sending PLAYBACK_ENDED.");
                 sendQoeEvent({ event: "PLAYBACK_ENDED", timestamp: Date.now() });
-                stopBufferMonitoring(); // Stop buffer monitoring on page unload.
+                stopBufferMonitoring();
             });
 
-
-            // --- HLS.js Setup and Event Handling ---
-            if (Hls.isSupported()) {
-                // Initialize HLS.js.
-                // The configuration here (autoLevelEnabled: false, startLevel: 0 in constructor)
-                // was found to be problematic in previous iterations.
-                // This version uses the "good version's" approach: initialize with defaults,
-                // then force settings in MANIFEST_PARSED.
+            if (Hls.isSupported()) { //
+                // Initialize HLS.js with its default settings first (autoLevelEnabled is true by default)
+                // We will override this in MANIFEST_PARSED for finer control, similar to your "good version"
                 hlsInstance = new Hls({ 
-                    debug: false 
-                    // autoLevelEnabled and startLevel are NOT set here to mimic the "good version" behavior
-                    // that the user reported as working after issues with constructor settings.
+                    debug: false
+                    // We are NOT setting autoLevelEnabled: false or startLevel: 0 here initially
+                    // to more closely mimic your "good version's" implied startup behavior
+                    // before it forcefully sets them in MANIFEST_PARSED.
                 });
 
-                // Timestamp for startup latency, captured just before HLS.js starts loading source.
-                playInitiatedTimestamp = Date.now(); 
+                playInitiatedTimestamp = Date.now(); //
                 console.log("QoE JS: Play initiation (HLS loadSource) timestamped at", playInitiatedTimestamp);
                 
-                hlsInstance.loadSource(masterM3u8Url); // Load the master M3U8 playlist.
-                hlsInstance.attachMedia(video);         // Attach HLS.js to the HTML video element.
+                hlsInstance.loadSource(masterM3u8Url); //
+                hlsInstance.attachMedia(video); //
 
-                // HLS.js Event: MANIFEST_PARSED
-                // Fired when the HLS manifest (playlist) has been successfully loaded and parsed.
-                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function (event, data) { 
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function (event, data) { //
                     console.log("HLS.js: Manifest parsed. Levels:", data.levels.map(l => ({bitrate: l.bitrate, resolution: `${l.width}x${l.height}`})));
-                    startBufferMonitoring(); // Begin periodic buffer level checks.
+                    
+                    startBufferMonitoring();
 
-                    // This block replicates the logic from the user's "good version" of player.html
-                    // to forcefully set the initial level and disable HLS.js's internal ABR
-                    // immediately after the manifest is parsed.
-                    if (hlsInstance.levels && hlsInstance.levels.length > 0) { 
-                        jsPreviousLevel = 0; // Assume starting at level 0 for QoE tracking.
+                    // --- Logic from your "good version" applied here ---
+                    if (hlsInstance.levels && hlsInstance.levels.length > 0) {
+                        jsPreviousLevel = 0; // Assume starts at level 0 for QoE tracking
                         
-                        // Force HLS.js to start at level 0 and disable its ABR capabilities.
-                        hlsInstance.currentLevel = 0;       // Set the current playback level to index 0.
-                        hlsInstance.autoLevelCapping = -1;  // Disable automatic level capping.
-                        hlsInstance.autoLevelEnabled = false; // Crucially disable HLS.js's own ABR.
+                        // Force HLS.js to start at level 0 and disable its ABR
+                        hlsInstance.currentLevel = 0;  // Force current level to 0
+                        hlsInstance.autoLevelCapping = -1; // Disable capping
+                        hlsInstance.autoLevelEnabled = false; // Disable HLS.js internal ABR
                         
                         console.log("HLS.js: MANIFEST_PARSED - Forcing level 0 and disabling HLS.js ABR. Initial jsPreviousLevel:", jsPreviousLevel);
                         
-                        // Update UI elements to reflect the initial quality.
-                        if (hlsInstance.levels[jsPreviousLevel]) { 
-                            const initialQualityText = `${hlsInstance.levels[jsPreviousLevel].height}p @ ${(hlsInstance.levels[jsPreviousLevel].bitrate / 1000).toFixed(0)} kbps`;
-                            if (currentQualitySpan) currentQualitySpan.textContent = initialQualityText; // Changed from displayedQualitySpan to currentQualitySpan from "good" version
+                        // Update UI for initial quality
+                        if (hlsInstance.levels[jsPreviousLevel]) {
+                             currentQualitySpan.textContent = `${hlsInstance.levels[jsPreviousLevel].height}p @ ${(hlsInstance.levels[jsPreviousLevel].bitrate / 1000).toFixed(0)} kbps`;
                         }
                         
-                        // Send an initial QUALITY_SWITCH event for QoE tracking.
-                        sendQoeEvent({ 
+                        // Send initial level to Python QoE
+                        sendQoeEvent({ //
                             event: "QUALITY_SWITCH",
-                            fromLevel: -1, // Indicates no prior level.
+                            fromLevel: -1, 
                             toLevel: jsPreviousLevel,
                             toBitrate: hlsInstance.levels[jsPreviousLevel].bitrate,
                             timestamp: Date.now()
                         });
                     }
+                    // --- End of logic from "good version" ---
                 });
 
-                // HLS.js Event: LEVEL_SWITCHED
-                // Fired when HLS.js has actually switched to a new quality level.
-                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, function(event, data) { 
-                    const newLevel = data.level; // Index of the new quality level.
-                    // Ensure levels array and the newLevel index are valid before accessing.
-                    if (hlsInstance.levels && hlsInstance.levels[newLevel]) {
-                        const newBitrate = hlsInstance.levels[newLevel].bitrate;
-                        const newHeight = hlsInstance.levels[newLevel].height;
-                        console.log(`HLS.js EVENT: LEVEL_SWITCHED to level index: ${newLevel}, bitrate: ${newBitrate}`);
-                        // Update UI to show the quality level actually being displayed.
-                        if (displayedQualitySpan) displayedQualitySpan.textContent = `${newHeight}p @ ${(hlsInstance.levels[newLevel].bitrate / 1000).toFixed(0)} kbps`; // Kept displayedQualitySpan
+                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, function(event, data) { //
+                    const newLevel = data.level;
+                    const newBitrate = hlsInstance.levels[newLevel].bitrate;
+                    const newHeight = hlsInstance.levels[newLevel].height;
+                    console.log(`HLS.js EVENT: LEVEL_SWITCHED to level index: ${newLevel}, bitrate: ${newBitrate}`);
+                    displayedQualitySpan.textContent = `${newHeight}p @ ${(newBitrate / 1000).toFixed(0)} kbps`;
 
-                        // If it's an actual change from the previously tracked level, send a QoE event.
-                        if (jsPreviousLevel !== newLevel) { 
-                             sendQoeEvent({ 
-                                event: "QUALITY_SWITCH",
-                                fromLevel: jsPreviousLevel, 
-                                toLevel: newLevel,
-                                toBitrate: newBitrate,
-                                timestamp: Date.now()
-                            });
-                            jsPreviousLevel = newLevel; // Update the tracked previous level.
-                        }
-                    } else {
-                        console.warn("LEVEL_SWITCHED event fired, but newLevel index is out of bounds or hlsInstance.levels not ready.");
+                    if (jsPreviousLevel !== newLevel) { // Modified from your "good" version, jsPreviousLevel === -1 condition was implicitly handled by first assignment
+                         sendQoeEvent({ //
+                            event: "QUALITY_SWITCH",
+                            fromLevel: jsPreviousLevel, // jsPreviousLevel should be 0 initially from MANIFEST_PARSED
+                            toLevel: newLevel,
+                            toBitrate: newBitrate,
+                            timestamp: Date.now()
+                        });
+                        jsPreviousLevel = newLevel;
                     }
                 });
-                
-                // HLS.js Event: FRAG_CHANGED
-                // Fired when HLS.js switches to playing a new fragment (segment).
-                hlsInstance.on(Hls.Events.FRAG_CHANGED, function(event, data) { 
-                    if (data && data.frag && currentSegmentSpan) { 
+
+                hlsInstance.on(Hls.Events.FRAG_CHANGED, function(event, data) {
+                    if (data && data.frag) {
                         const frag = data.frag;
-                        // Display the sequence number of the current segment.
-                        currentSegmentSpan.textContent = `Segment ${frag.sn}`; 
-                        console.log(`HLS.js EVENT: FRAG_CHANGED - SN: ${frag.sn}, Level: ${frag.level}, URL: ${frag.url.substring(frag.url.lastIndexOf('/') + 1)}`);
+                        const segmentName = frag.url.substring(frag.url.lastIndexOf('/') + 1);
+                        currentSegmentSpan.textContent = `Segment ${frag.sn}`;
+                        console.log(`HLS.js EVENT: FRAG_CHANGED - SN: ${frag.sn}, Level: ${frag.level}, URL: ${segmentName}`);
                     }
                 });
                 
-                // HLS.js Event: ERROR
-                // Fired when an error occurs within HLS.js.
-                hlsInstance.on(Hls.Events.ERROR, function (event, data) { 
+                hlsInstance.on(Hls.Events.ERROR, function (event, data) {  //
                     console.error('HLS.js Error:', data);
-                    // Example error handling for fatal errors.
-                    if (data.fatal) {
-                        switch (data.type) {
-                            case Hls.ErrorTypes.NETWORK_ERROR:
-                                console.error('HLS.js: Fatal network error encountered.');
-                                // hlsInstance.startLoad(); // Example recovery attempt
-                                break;
-                            case Hls.ErrorTypes.MEDIA_ERROR:
-                                console.error('HLS.js: Fatal media error encountered.');
-                                // hlsInstance.recoverMediaError(); // Example recovery attempt
-                                break;
-                            default:
-                                console.error('HLS.js: Unrecoverable fatal error.');
-                                // hlsInstance.destroy(); // Clean up HLS.js instance
-                                break;
-                        }
-                    }
                 });
 
-            // Fallback for browsers that support native HLS but not HLS.js via Media Source Extensions.
-            } else if (video.canPlayType('application/vnd.apple.mpegurl')) { 
-                console.log("HLS.js not supported, using native HLS playback.");
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) { //
                 video.src = masterM3u8Url;
-                // Note: Native HLS will not use the Python ABR logic or provide detailed HLS.js events.
-            } else { 
-                // Fallback if HLS is not supported at all.
+            } else { //
                 alert("HLS is not supported in your browser.");
             }
 
-            // --- Buffer Monitoring Logic ---
-            let bufferMonitoringInterval = null; // Interval timer for buffer monitoring.
-            /**
-             * Starts periodic monitoring of the video buffer level.
-             * Retrieves buffer length and sends "BUFFER_UPDATE" events via WebSocket.
-             */
-            function startBufferMonitoring() { 
-                if (bufferMonitoringInterval) { // Clear any existing interval to prevent duplicates.
+            let bufferMonitoringInterval = null; //
+            function startBufferMonitoring() { /* ... same as your previous new version ... */ //
+                if (bufferMonitoringInterval) {
                     clearInterval(bufferMonitoringInterval);
                 }
                 console.log("HLS.js: Starting buffer monitoring.");
                 bufferMonitoringInterval = setInterval(function() {
-                    // Ensure HLS instance exists and video metadata is loaded.
                     if (hlsInstance && video.readyState > 0) { 
                         let currentBufferLength = 0;
-                        // Prefer hls.mainForwardBufferInfo for more accurate forward buffer length in modern HLS.js.
                         if (hlsInstance.mainForwardBufferInfo && typeof hlsInstance.mainForwardBufferInfo.len === 'number') { 
                             currentBufferLength = hlsInstance.mainForwardBufferInfo.len;
-                        } else if (video.buffered && video.buffered.length > 0 && video.currentTime !== undefined) {
-                            // Fallback to HTML5 video.buffered TimeRanges to calculate forward buffer.
+                        } else if (video.buffered && video.buffered.length > 0 && video.currentTime !== undefined) { 
                             for (let i = 0; i < video.buffered.length; i++) {
                                 if (video.buffered.start(i) <= video.currentTime && video.currentTime < video.buffered.end(i)) {
                                     currentBufferLength = video.buffered.end(i) - video.currentTime;
                                     break;
                                 }
                             }
-                            // If currentTime is not within any current buffered range but buffer exists ahead
-                            // (e.g., after a seek or at the very start before playback catches up).
                             if (currentBufferLength === 0 && video.buffered.length > 0 && video.buffered.end(video.buffered.length -1) > video.currentTime) { 
                                 let maxEnd = video.currentTime;
                                 for(let i=0; i < video.buffered.length; i++) {
@@ -558,16 +451,13 @@
                                 currentBufferLength = Math.max(0, maxEnd - video.currentTime);
                             }
                         }
-                        if (bufferLevelSpan) bufferLevelSpan.textContent = `${currentBufferLength.toFixed(2)} s`;
+                        bufferLevelSpan.textContent = `${currentBufferLength.toFixed(2)} s`;
                         sendQoeEvent({ event: "BUFFER_UPDATE", value: currentBufferLength });
                     }
-                }, 1000); // Send buffer update every 1 second.
+                }, 1000);
             }
 
-            /**
-             * Stops the periodic buffer monitoring.
-             */
-            function stopBufferMonitoring() { 
+            function stopBufferMonitoring() { /* ... same as your previous new version ... */ //
                 if (bufferMonitoringInterval) {
                     clearInterval(bufferMonitoringInterval);
                     bufferMonitoringInterval = null;

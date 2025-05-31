@@ -418,7 +418,7 @@ class ABRManager:
 
     def abr_loop(self): # 和你之前的一样
         logger.info(f"ABR Python Algo ({self.logic_type}) monitoring thread started.")
-        time.sleep(5) # 初始等待，让播放器先缓冲一些
+        time.sleep(3) # 初始等待，让播放器先缓冲一些
         while not self.stop_abr_event.is_set():
             try:
                 self._abr_decision_logic() # 调用主分发方法
