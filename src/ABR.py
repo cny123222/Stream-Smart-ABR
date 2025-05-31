@@ -58,6 +58,7 @@ class ABRManager:
     LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE = "enhanced_buffer_response" # 新的、更积极响应缓冲区的逻辑
 
     def __init__(self, available_streams_from_master, broadcast_abr_decision_callback,
+                 broadcast_bw_estimate_callback=None,
                  logic_type=LOGIC_TYPE_BANDWIDTH_BUFFER): # 默认使用带宽+缓冲区逻辑
         ABRManager.instance = self
         self.available_streams = sorted(
@@ -68,6 +69,7 @@ class ABRManager:
             self.available_streams = [{'url': 'dummy', 'bandwidth': 0, 'resolution': 'N/A', 'attributes_str': ''}]
 
         self.broadcast_abr_decision = broadcast_abr_decision_callback
+        self.broadcast_bw_estimate = broadcast_bw_estimate_callback
         self.current_stream_index_by_abr = 0
         self.segment_download_stats = []
         self.max_stats_history = 5 # 你之前用的是20，但对于快速响应，可以考虑减小，或根据逻辑调整
@@ -147,6 +149,8 @@ class ABRManager:
         
         self.estimated_bandwidth_bps = (total_bytes * 8) / total_time
         # logger.info(f"ABR SimpleAvg BW Est: {self.estimated_bandwidth_bps / 1000:.0f} Kbps") # 日志由具体决策逻辑打印
+        if self.broadcast_bw_estimate and self.estimated_bandwidth_bps > 0: # 仅当有有效估算时发送
+            self.broadcast_bw_estimate(self.estimated_bandwidth_bps / 1_000_000) # 发送Mbps
         return self.estimated_bandwidth_bps
 
     # --- 新增：一个稍微增强的带宽估计，对近期和突变响应更快一点 (示例) ---
@@ -171,6 +175,8 @@ class ABRManager:
             # 更激进地降低估算，例如取最近一次和平均值的一个较小比例的组合
             adjusted_bps = (last_segment_throughput_bps * 0.7) + (current_avg_bps * 0.3)
             self.estimated_bandwidth_bps = adjusted_bps # 更新主估算值
+            if self.broadcast_bw_estimate and adjusted_bps > 0:
+                self.broadcast_bw_estimate(adjusted_bps / 1_000_000) # 发送Mbps
             return adjusted_bps
         
         # 否则，正常返回简单平均值 (或者可以加入对持续高速的奖励等)
@@ -240,11 +246,9 @@ class ABRManager:
 
     # --- 决策逻辑2: 看带宽和缓冲区 (你上一轮测试的逻辑) ---
     def _logic_bandwidth_buffer(self):
-        # 这个方法基本就是你上一轮测试时使用的 _abr_decision_logic 的内容
-        # 我会直接将那份逻辑粘贴过来，并做少量调整以适应新结构
         if not self.available_streams or len(self.available_streams) <= 1: return
 
-        estimated_bw_bps = self._estimate_bandwidth_simple_average() # 这个逻辑用简单平均
+        estimated_bw_bps = self._estimate_bandwidth_simple_average() # 简单平均
         with self._internal_lock:
             current_buffer_s = self.current_player_buffer_s
         current_level_index = self.current_stream_index_by_abr

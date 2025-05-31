@@ -144,20 +144,17 @@
         </div>
 
         <div class="info-panels-container">
-            <div class="panel" id="streamInfoPanel">
-                <h2>Stream & ABR Information</h2>
-                <p><span class="label">Video Name:</span> <span id="masterUrlSpan" class="value">Loading...</span></p>
-                <p><span class="label">ABR Control:</span> <span class="value">Python Backend</span></p>
-                <p><span class="label">Current Playing Segment:</span> <span id="currentSegmentSpan" class="value">-</span></p>
-                <p><span class="label">Loaded Quality Level:</span> <span id="loadedQualitySpan" class="value">-</span></p> </div>
+            <div class="panel" id="playbackInfoPanel"> <h2>Current Stream Info</h2>
+                <p><span class="label">Video Name:</span> <span id="videoNameSpan" class="value">Loading...</span></p> <p><span class="label">Current Segment:</span> <span id="currentSegmentSpan" class="value">-</span></p>
+                <p><span class="label">Displayed Quality:</span> <span id="displayedQualitySpan" class="value">-</span></p>
+                <p><span class="label">Loading Quality:</span> <span id="loadedQualitySpan" class="value">-</span></p>
+            </div>
 
-            <div class="panel" id="qoeMetricsPanel">
-                <h2>QoE & Network Metrics</h2>
-                <p><span class="label">Displayed Quality:</span> <span id="displayedQualitySpan" class="value">-</span></p> 
+            <div class="panel" id="networkQoePanel"> <h2>Performance Metrics</h2>
                 <p><span class="label">Buffer Level:</span> <span id="bufferLevelSpan" class="value">- s</span></p>
                 <p><span class="label">Network Simulator:</span> <span id="networkSimStatusSpan" class="value">N/A</span></p>
-                <p><span class="label">Total Rebuffering:</span> <span id="rebufferingCountSpan" class="value">0 events</span>, <span id="rebufferingDurationSpan" class="value">0 ms</span></p>
-            </div>
+                <p><span class="label">Estimated Bandwidth:</span> <span id="estimatedAbrBwSpan" class="value">N/A</span></p> <p><span class="label">Total Rebuffering:</span> <span id="rebufferingCountSpan" class="value">0 events</span>, <span id="rebufferingDurationSpan" class="value">0 ms</span></p>
+                </div>
         </div>
     </div>
 
@@ -175,18 +172,23 @@
             const websocketPort = "{WEBSOCKET_PORT}";
 
             const masterM3u8Url = `http://${localProxyHost}:${localProxyPort}/${videoToStreamName}/master.m3u8`;
-            document.getElementById('masterUrlSpan').textContent = videoToStreamName; 
 
+            const videoNameSpan = document.getElementById('videoNameSpan');
             const currentSegmentSpan = document.getElementById('currentSegmentSpan');
-            const loadedQualitySpan = document.getElementById('loadedQualitySpan'); // Python ABR加载的等级
-            const displayedQualitySpan = document.getElementById('displayedQualitySpan'); // HLS.js实际显示的等级
+            const loadedQualitySpan = document.getElementById('loadedQualitySpan');
+            const displayedQualitySpan = document.getElementById('displayedQualitySpan');
             const bufferLevelSpan = document.getElementById('bufferLevelSpan');
             const networkSimStatusSpan = document.getElementById('networkSimStatusSpan');
+            const estimatedAbrBwSpan = document.getElementById('estimatedAbrBwSpan');
             const rebufferingCountSpan = document.getElementById('rebufferingCountSpan');
             const rebufferingDurationSpan = document.getElementById('rebufferingDurationSpan');
 
             let hlsInstance = null;
             const ws = new WebSocket(`ws://${localProxyHost}:${websocketPort}`);
+
+            if (videoNameSpan) {
+                videoNameSpan.textContent = videoToStreamName;
+            }
 
             let totalRebufferingEvents = 0;
             let totalRebufferingDurationMs = 0;
@@ -217,24 +219,34 @@
                     if (message.type === "SET_LEVEL" && hlsInstance) {
                         const newLevelIndex = parseInt(message.levelIndex);
                         if (hlsInstance.levels && newLevelIndex >= 0 && newLevelIndex < hlsInstance.levels.length) {
-                            if (hlsInstance.currentLevel !== newLevelIndex || hlsInstance.nextLevel !== newLevelIndex) { // Modified to ensure nextLevel is also checked
+                            if (hlsInstance.nextLevel !== newLevelIndex) {
                                 console.log(`Python ABR COMMAND: Set hlsInstance.nextLevel to: ${newLevelIndex}`);
-                                hlsInstance.nextLevel = newLevelIndex; // Setting nextLevel is generally preferred
-                                loadedQualitySpan.textContent = `${hlsInstance.levels[newLevelIndex].height}p @ ${(hlsInstance.levels[newLevelIndex].bitrate / 1000).toFixed(0)} kbps`;
+                                hlsInstance.nextLevel = newLevelIndex;
+                                if (loadedQualitySpan && hlsInstance.levels[newLevelIndex]) { // 安全检查
+                                    loadedQualitySpan.textContent = `${hlsInstance.levels[newLevelIndex].height}p @ ${(hlsInstance.levels[newLevelIndex].bitrate / 1000).toFixed(0)} kbps`;
+                                }
                             }
                         } else {
                             console.warn(`Python ABR COMMAND: Invalid levelIndex ${newLevelIndex} or hlsInstance.levels not ready.`);
                         }
-                    } else if (message.type === "NETWORK_SIM_UPDATE") { // 新增：处理来自Python的网络模拟器状态更新
-                        if (message.data && typeof message.data.bandwidth_Mbps === 'number') {
-                            networkSimStatusSpan.textContent = `${message.data.bandwidth_Mbps.toFixed(2)} Mbps`;
-                        } else if (message.data && message.data.status === 'Full Speed') {
-                            networkSimStatusSpan.textContent = "Full Speed";
-                        } else {
-                            networkSimStatusSpan.textContent = "N/A";
+                    } else if (message.type === "NETWORK_SIM_UPDATE") { //
+                        if (networkSimStatusSpan) { // 安全检查
+                            if (message.data && typeof message.data.bandwidth_Mbps === 'number') {
+                                networkSimStatusSpan.textContent = `${message.data.bandwidth_Mbps.toFixed(2)} Mbps`;
+                            } else if (message.data && message.data.status === 'Full Speed') {
+                                networkSimStatusSpan.textContent = "Full Speed";
+                            } else {
+                                networkSimStatusSpan.textContent = "N/A";
+                            }
+                        }
+                    } else if (message.type === "ABR_BW_ESTIMATE_UPDATE") { // 新增：处理Python ABR估算的带宽更新
+                        if (estimatedAbrBwSpan && message.data && typeof message.data.estimated_Mbps === 'number') { // 安全检查
+                            estimatedAbrBwSpan.textContent = `${message.data.estimated_Mbps.toFixed(2)} Mbps`;
+                        } else if (estimatedAbrBwSpan) {
+                            estimatedAbrBwSpan.textContent = "N/A";
                         }
                     }
-                } catch (e) { console.error("Error processing ABR command from WebSocket:", e); }
+                } catch (e) { console.error("Error processing message from WebSocket:", e); }
             };
 
             let playInitiatedTimestamp = 0; //
@@ -368,10 +380,8 @@
                 hlsInstance.on(Hls.Events.FRAG_CHANGED, function(event, data) {
                     if (data && data.frag) {
                         const frag = data.frag;
-                        // frag.url 是完整的URL，可能太长，我们可以只取文件名或序号
                         const segmentName = frag.url.substring(frag.url.lastIndexOf('/') + 1);
-                        // currentSegmentSpan.textContent = `${segmentName} (SN: ${frag.sn}, Level: ${frag.level})`;
-                        currentSegmentSpan.textContent = `SN: ${frag.sn} (L${frag.level})`; // 显示序号和等级
+                        currentSegmentSpan.textContent = `Segment ${frag.sn}`;
                         console.log(`HLS.js EVENT: FRAG_CHANGED - SN: ${frag.sn}, Level: ${frag.level}, URL: ${segmentName}`);
                     }
                 });

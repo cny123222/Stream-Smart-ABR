@@ -231,6 +231,13 @@ def schedule_abr_broadcast(level_index):
     else:
         logger.warning("Cannot schedule ABR broadcast: WebSocket asyncio loop not available or not running.")
         
+def schedule_abr_bw_estimate_broadcast(estimated_mbps):
+    if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
+        message = json.dumps({"type": "ABR_BW_ESTIMATE_UPDATE", "data": {"estimated_Mbps": estimated_mbps}})
+        asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
+    else:
+        logger.warning("Cannot schedule ABR BW Estimate broadcast: WebSocket asyncio loop not available.")
+        
 def schedule_network_sim_status_broadcast(status_data):
     if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
         message = json.dumps({"type": "NETWORK_SIM_UPDATE", "data": status_data})
@@ -511,6 +518,7 @@ def main():
         abr_manager_instance = ABRManager(
             available_streams,
             broadcast_abr_decision_callback=schedule_abr_broadcast,
+            broadcast_bw_estimate_callback=schedule_abr_bw_estimate_broadcast,
             logic_type=selected_logic
         )
         abr_manager_instance.start()
