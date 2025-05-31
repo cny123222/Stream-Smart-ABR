@@ -101,7 +101,7 @@ class ABRManager:
                 self._current_selected_url_for_logging = None
 
     def add_segment_download_stat(self, url, size_bytes, duration_seconds): # 和你之前的一样
-        if duration_seconds > 0.001:
+        if duration_seconds > 0.0001:
             # --- 新增：记录下载开始和结束时间，用于更高级的带宽估计 ---
             download_end_time = time.time()
             download_start_time = download_end_time - duration_seconds
