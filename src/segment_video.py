@@ -2,247 +2,408 @@ import subprocess
 import os
 import logging
 
-# 日志设置 (保持不变)
-logger = logging.getLogger('SegmentVideo')
-if not logger.handlers:
+# Logger setup
+# Use the module's own name for the logger, which is a common Python practice.
+# This helps in identifying the origin of log messages in larger projects.
+logger = logging.getLogger(__name__)
+if not logger.handlers: # Ensure handler is not added multiple times if module is reloaded
     logger.setLevel(logging.INFO)
-    ch_seg = logging.StreamHandler()
-    formatter_seg = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    ch_seg.setFormatter(formatter_seg)
-    logger.addHandler(ch_seg)
+    console_handler = logging.StreamHandler()
+    # Consistent log format, including timestamp, logger name, level, and message.
+    log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(log_formatter)
+    logger.addHandler(console_handler)
 
-def segment_video(video_path, output_dir, segment_duration=5, 
-                  quality_suffix="1080p-8000k", 
+def segment_video(video_path, output_dir, segment_duration=5,
+                  quality_suffix="1080p-8000k",
                   ffmpeg_encoder_options=None):
     """
-    将视频分片为TS文件，并为每个质量等级生成一个媒体M3U8播放列表，使用HLS muxer。
-    返回生成的媒体M3U8文件的完整路径，如果成功的话。
+    Segments a video into transport stream (TS) files and generates a corresponding
+    media M3U8 playlist for a specific quality level using FFmpeg's HLS muxer.
+
+    This function creates a dedicated directory for each quality level to store
+    its TS segments and media M3U8 playlist.
+
+    Args:
+        video_path (str): The absolute or relative path to the source video file.
+        output_dir (str): The base directory where all video segment processing outputs
+                          will be stored (e.g., "video_segments_output"). Subdirectories
+                          like "output_dir/video_name/quality_suffix/" will be created.
+        segment_duration (int, optional): The target duration of each TS segment
+                                          in seconds. Defaults to 5.
+        quality_suffix (str, optional): A descriptive suffix for this quality level,
+                                        used in directory and file naming conventions
+                                        (e.g., "1080p-8000k"). Defaults to "1080p-8000k".
+        ffmpeg_encoder_options (list, optional): A list of FFmpeg command-line options
+                                                 specifically for encoding this quality
+                                                 level. If None, FFmpeg's '-codec copy'
+                                                 will be used, meaning no re-encoding.
+                                                 Defaults to None.
+
+    Returns:
+        str or None: The full path to the generated media M3U8 file if segmentation
+                     is successful; otherwise, None.
     """
     if not os.path.exists(video_path):
-        logger.error(f"错误: 视频文件 {video_path} 未找到。")
+        logger.error(f"Source video file not found: {video_path}")
         return None
 
     video_name_no_ext = os.path.splitext(os.path.basename(video_path))[0]
-    
-    # 特定质量分片的输出目录，例如: video_segments/video_name/1080p-8000k
-    specific_quality_dir = os.path.join(output_dir, video_name_no_ext, quality_suffix)
-    os.makedirs(specific_quality_dir, exist_ok=True)
 
-    # 媒体M3U8文件名和完整路径
+    # Construct the output directory path for this specific quality's segments and playlist.
+    # Example: video_segments_output/bbb_sunflower/1080p-8000k
+    specific_quality_dir = os.path.join(output_dir, video_name_no_ext, quality_suffix)
+    try:
+        os.makedirs(specific_quality_dir, exist_ok=True)
+    except OSError as e:
+        logger.error(f"Failed to create directory {specific_quality_dir}: {e}")
+        return None
+
+    # Define media M3U8 filename and its full output path.
     media_m3u8_filename = f"{video_name_no_ext}-{quality_suffix}.m3u8"
     media_m3u8_output_path = os.path.join(specific_quality_dir, media_m3u8_filename)
 
-    # TS分片的文件名模式。-hls_segment_filename 需要一个路径模式。
-    # 如果M3U8和TS在同一目录 (specific_quality_dir)，则可以直接使用文件名模式。
-    # FFmpeg 会在 specific_quality_dir 中创建这些TS文件。
-    ts_segment_filename_pattern = f"{video_name_no_ext}-{quality_suffix}-%05d.ts"
-    ts_segment_filename_pattern = os.path.join(specific_quality_dir, ts_segment_filename_pattern)
-    # -hls_segment_filename 参数的值应该是相对于M3U8输出目录的路径，或者是一个绝对路径。
-    # 这里我们让TS和M3U8在同一个 specific_quality_dir 目录下，所以直接用模式名。
-    # FFmpeg的CWD（当前工作目录）会影响相对路径的解析，为保险起见，给hls_segment_filename一个相对于M3U8的路径，
-    # 或者让FFmpeg自己处理。如果m3u8_output_path是最终输出参数，FFmpeg通常会将ts文件放在其旁边。
-    # 最简单的方式是让 -hls_segment_filename 只包含文件名模式，FFmpeg会将TS文件输出到与M3U8相同的目录。
-    
+    # Define the filename pattern for TS segments.
+    # FFmpeg's -hls_segment_filename option requires a pattern that can include
+    # formatting directives like %05d for sequence numbers.
+    ts_segment_filename_template = f"{video_name_no_ext}-{quality_suffix}-%05d.ts"
+    # It's generally more robust to provide FFmpeg with a full path pattern for segments,
+    # ensuring they are created in the intended 'specific_quality_dir'.
+    ts_segment_full_path_pattern = os.path.join(specific_quality_dir, ts_segment_filename_template)
+
+    # Base FFmpeg command. '-y' overwrites output files without asking.
     cmd = ['ffmpeg', '-y', '-i', video_path]
 
+    # Handle FFmpeg encoder options and stream mapping.
     has_map_in_options = False
     if ffmpeg_encoder_options:
         cmd.extend(ffmpeg_encoder_options)
+        # Check if user-provided options include a '-map' directive.
         if any(opt == '-map' for opt in ffmpeg_encoder_options):
             has_map_in_options = True
-        if not has_map_in_options: # 如果提供了编码选项但没有map，发出警告
-            logger.warning(f"警告: 为 {quality_suffix} 提供的 ffmpeg_encoder_options 中缺少 '-map' 指令。FFmpeg将使用默认流选择。")
-    else: 
-        logger.info(f"未提供 {quality_suffix} 的转码选项。将使用 '-codec copy'。")
+        if not has_map_in_options:
+            logger.warning(
+                f"ffmpeg_encoder_options for '{quality_suffix}' were provided without a '-map' directive. "
+                f"FFmpeg will use its default stream selection behavior, which might not be intended."
+            )
+    else:
+        # If no specific encoding options, use 'codec copy' to avoid re-encoding.
+        logger.info(f"No transcoding options provided for '{quality_suffix}'. Using '-codec copy'.")
         cmd.extend(['-codec', 'copy'])
-        # 对于codec copy，如果用户没有提供-map，我们添加一个默认的，尝试选择第一个视频和第一个音频（如果存在）
-        # 注意：这里的 '0:a:0?' 如果源视频没有音频，不会报错。
-        if not has_map_in_options: # 确保这个检查针对的是 ffmpeg_encoder_options 为 None 的情况
-            logger.info("Codec copy模式下未提供-map，默认映射第一个视频流(0:v:0?)和第一个音频流(0:a:0?)")
+        # For 'codec copy', if no '-map' is given, FFmpeg might not select any streams or might
+        # select only video by default. We add a default map to try selecting the first video
+        # and first audio stream if they exist. '0:v:0?' and '0:a:0?' are speculative maps;
+        # '?' makes them optional, so FFmpeg won't error if a stream type isn't present.
+        if not has_map_in_options: # This condition applies if ffmpeg_encoder_options was None
+            logger.info(
+                "In '-codec copy' mode and no '-map' provided by user. Defaulting to map "
+                "first video stream (0:v:0?) and first audio stream (0:a:0?), if available."
+            )
             cmd.extend(['-map', '0:v:0?', '-map', '0:a:0?'])
 
-
-    # 使用HLS muxer的选项
+    # Add HLS-specific FFmpeg options.
     cmd.extend([
-        '-f', 'hls',
-        '-hls_time', str(segment_duration),
-        '-hls_playlist_type', 'vod',
-        # '-hls_segment_filename' 的值是相对于M3U8文件所在目录的路径模式
-        # 由于M3U8和TS在同一目录 (specific_quality_dir)，这里可以直接使用文件名模式
-        '-hls_segment_filename', ts_segment_filename_pattern, 
-        '-hls_flags', 'independent_segments',
-        media_m3u8_output_path # M3U8播放列表的输出路径 (FFmpeg命令的最后一个参数)
+        '-f', 'hls',                             # Output format is HLS.
+        '-hls_time', str(segment_duration),       # Target segment duration.
+        '-hls_playlist_type', 'vod',              # Creates a VOD (Video On Demand) type playlist.
+                                                  # Use 'event' for live streams.
+        '-hls_segment_filename', ts_segment_full_path_pattern, # Full path pattern for TS files.
+        '-hls_flags', 'independent_segments',     # Crucial for ABR: ensures each segment can be
+                                                  # decoded independently without relying on prior segments
+                                                  # beyond the HLS spec for keyframes.
+        media_m3u8_output_path                    # Path for the generated media M3U8 file.
     ])
 
-    logger.info(f"执行 FFmpeg ({quality_suffix}): {' '.join(cmd)}")
+    logger.info(f"Executing FFmpeg for '{quality_suffix}': {' '.join(cmd)}")
     try:
+        # Start the FFmpeg process. stdout and stderr are piped to capture output.
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate(timeout=3600) 
-        
+        # Wait for the process to complete and get its output.
+        # A timeout is set to prevent indefinite blocking (e.g., 1 hour).
+        stdout, stderr = process.communicate(timeout=3600)
+
+        # Decode and log FFmpeg's stderr (often contains progress and errors).
         stderr_decoded = stderr.decode(errors='ignore')
-        if stderr_decoded:
-            logger.info(f"FFmpeg STDERR ({quality_suffix}):\n{stderr_decoded}")
+        if stderr_decoded.strip(): # Log if not empty
+            logger.info(f"FFmpeg STDERR for '{quality_suffix}':\n{stderr_decoded}")
         else:
-            logger.info(f"FFmpeg STDERR ({quality_suffix}): No output.")
-        
-        if stdout.decode(errors='ignore'): # stdout 通常为空，除非FFmpeg特殊配置
-            logger.info(f"FFmpeg STDOUT ({quality_suffix}):\n{stdout.decode(errors='ignore')}")
+            logger.info(f"FFmpeg STDERR for '{quality_suffix}': No output or only whitespace.")
+
+        # FFmpeg stdout is usually empty for HLS muxing unless specific options are used.
+        stdout_decoded = stdout.decode(errors='ignore')
+        if stdout_decoded.strip(): # Log if not empty
+            logger.info(f"FFmpeg STDOUT for '{quality_suffix}':\n{stdout_decoded}")
 
         if process.returncode == 0:
-            logger.info(f"视频 {quality_suffix} 成功分片 (HLS muxer) 并生成媒体M3U8到 {media_m3u8_output_path}")
+            logger.info(
+                f"Video successfully segmented for '{quality_suffix}'. "
+                f"Media M3U8 generated: {media_m3u8_output_path}"
+            )
             return media_m3u8_output_path
         else:
-            logger.error(f"FFmpeg HLS 执行错误 ({quality_suffix}): Return code: {process.returncode}")
+            logger.error(
+                f"FFmpeg HLS execution failed for '{quality_suffix}'. "
+                f"Return code: {process.returncode}. Check STDERR above for details."
+            )
             return None
-            
+
     except FileNotFoundError:
-        logger.error("错误: FFmpeg 命令未找到。请确保已安装 FFmpeg 并将其添加到系统 PATH。")
+        logger.error(
+            "FFmpeg command not found. Please ensure FFmpeg is installed "
+            "and its executable is in your system's PATH environment variable."
+        )
     except subprocess.TimeoutExpired:
-        logger.error(f"FFmpeg 执行超时 ({quality_suffix})。进程将被终止。")
-        if process.poll() is None: process.kill()
+        logger.error(
+            f"FFmpeg execution timed out (limit: 3600s) for '{quality_suffix}'. "
+            "The process will be terminated."
+        )
+        if process.poll() is None:  # Check if process is still running
+            process.kill()
+            logger.info(f"FFmpeg process for '{quality_suffix}' killed due to timeout.")
+        # Attempt to get any output after killing (may be partial or empty)
         stdout, stderr = process.communicate()
-        logger.error(f"FFmpeg STDOUT (on timeout):\n{stdout.decode(errors='ignore')}")
-        logger.error(f"FFmpeg STDERR (on timeout):\n{stderr.decode(errors='ignore')}")
+        logger.error(f"FFmpeg STDOUT (on timeout, after kill) for '{quality_suffix}':\n{stdout.decode(errors='ignore')}")
+        logger.error(f"FFmpeg STDERR (on timeout, after kill) for '{quality_suffix}':\n{stderr.decode(errors='ignore')}")
     except Exception as e:
-        logger.error(f"执行 FFmpeg 时发生未知错误 ({quality_suffix}): {e}")
+        # Catch any other unexpected exceptions during FFmpeg execution.
+        logger.error(f"An unexpected error occurred while executing FFmpeg for '{quality_suffix}': {e}", exc_info=True)
     return None
 
 
-def create_master_playlist(output_video_base_dir, qualities_details_list, master_m3u8_filename="master.m3u8"):
+def create_master_playlist(output_video_base_dir, qualities_details_list,
+                           master_m3u8_filename="master.m3u8"):
     """
-    在指定的视频基础目录下创建主 M3U8 播放列表。
+    Creates a master M3U8 playlist file that points to multiple media M3U8 playlists
+    for different quality levels (Adaptive Bitrate Streaming).
 
     Args:
-        output_video_base_dir (str): 特定视频的输出根目录 (例如, "video_segments/video_name")
-        qualities_details_list (list): 一个字典列表，每个字典包含一个质量流的信息:
-            [
-                {'suffix': '480p-1500k', 'bandwidth': 1596000, 'resolution': '854x480', 
-                 'codecs': 'avc1.64001e,mp4a.40.2', 'media_m3u8_filename': 'video_name-480p-1500k.m3u8'},
-                # ... 其他质量
-            ]
-        master_m3u8_filename (str): 生成的主M3U8文件名。
+        output_video_base_dir (str): The root output directory for the processed video,
+                                     where the master M3U8 file will be saved.
+                                     Example: "video_segments_output/video_name".
+        qualities_details_list (list): A list of dictionaries. Each dictionary must
+                                       contain details for one quality stream/variant,
+                                       including 'suffix', 'bandwidth',
+                                       'media_m3u8_filename', and optionally
+                                       'resolution' and 'codecs'.
+                                       Example:
+                                       [
+                                           {'suffix': '480p-1500k', 'bandwidth': 1596000,
+                                            'resolution': '854x480', 'codecs': 'avc1.64001e,mp4a.40.2',
+                                            'media_m3u8_filename': 'video_name-480p-1500k.m3u8'},
+                                           # ... other quality stream dictionaries ...
+                                       ]
+        master_m3u8_filename (str, optional): The desired filename for the master M3U8
+                                             playlist. Defaults to "master.m3u8".
     """
     master_m3u8_path = os.path.join(output_video_base_dir, master_m3u8_filename)
-    os.makedirs(output_video_base_dir, exist_ok=True) # 确保视频根目录存在
+    try:
+        os.makedirs(output_video_base_dir, exist_ok=True)
+    except OSError as e:
+        logger.error(f"Failed to create directory for master playlist {master_m3u8_path}: {e}")
+        return
 
-    with open(master_m3u8_path, 'w', encoding='utf-8') as f:
-        f.write("#EXTM3U\n")
-        f.write("#EXT-X-VERSION:3\n") # HLS 版本号
+    try:
+        with open(master_m3u8_path, 'w', encoding='utf-8') as f:
+            f.write("#EXTM3U\n")            # Standard M3U8 header
+            f.write("#EXT-X-VERSION:3\n")   # Specifies HLS protocol version (3 is widely compatible)
 
-        for quality_info in qualities_details_list:
-            quality_suffix = quality_info['suffix']
-            bandwidth = quality_info['bandwidth']
-            resolution = quality_info.get('resolution')
-            codecs = quality_info.get('codecs', "avc1.42001E,mp4a.40.2") # 提供一个通用默认值
-            media_m3u8_filename = quality_info['media_m3u8_filename']
+            for quality_info in qualities_details_list:
+                # Extract details for each quality stream.
+                quality_suffix = quality_info['suffix']
+                bandwidth = quality_info['bandwidth']
+                resolution = quality_info.get('resolution') # Resolution is optional
+                # Provide a common default for codecs if not specified for a variant.
+                codecs = quality_info.get('codecs', "avc1.42001E,mp4a.40.2") # Generic H.264 + AAC
+                media_m3u8_filename = quality_info['media_m3u8_filename']
 
-            # 媒体播放列表的路径，相对于主播放列表的路径
-            # 例如: 480p-1500k/video_name-480p-1500k.m3u8
-            relative_media_m3u8_path = os.path.join(quality_suffix, media_m3u8_filename).replace('\\', '/')
+                # Construct the relative path to the media playlist from the master playlist's location.
+                # Example: "480p-1500k/video_name-480p-1500k.m3u8"
+                # M3U8 paths should use forward slashes, regardless of the operating system.
+                relative_media_m3u8_path = os.path.join(quality_suffix, media_m3u8_filename).replace('\\', '/')
 
-            stream_inf_line = f"#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}"
-            if resolution:
-                stream_inf_line += f",RESOLUTION={resolution}"
-            if codecs: # CODECS 对于某些播放器很重要
-                stream_inf_line += f",CODECS=\"{codecs}\""
-            
-            f.write(stream_inf_line + "\n")
-            f.write(relative_media_m3u8_path + "\n")
-        
-    logger.info(f"主 M3U8 播放列表已创建: {master_m3u8_path}")
+                # Build the #EXT-X-STREAM-INF tag line.
+                stream_inf_line = f"#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}"
+                if resolution:
+                    stream_inf_line += f",RESOLUTION={resolution}"
+                if codecs: # The CODECS attribute is important for player compatibility.
+                    stream_inf_line += f",CODECS=\"{codecs}\""
+
+                f.write(stream_inf_line + "\n")
+                f.write(relative_media_m3u8_path + "\n")
+
+        logger.info(f"Master M3U8 playlist successfully created at: {master_m3u8_path}")
+    except IOError as e:
+        logger.error(f"Failed to write master M3U8 playlist to {master_m3u8_path}: {e}")
+    except KeyError as e:
+        logger.error(f"Missing expected key in qualities_details_list for master playlist generation: {e}. "
+                     "Each item requires 'suffix', 'bandwidth', and 'media_m3u8_filename'.")
 
 
 if __name__ == '__main__':
-    SOURCE_VIDEO_FILE = "bbb_sunflower.mp4" 
-    BASE_OUTPUT_DIR = "video_segments" # 顶级输出目录, 例如 "video_segments"
-    SEGMENT_DURATION = 5 
-    VIDEO_FRAMERATE = 30 # 请根据你的视频实际帧率调整
+    # --- Configuration for script execution ---
+    SOURCE_VIDEO_FILE = "bbb_sunflower.mp4"     # Path to the input video file.
+    BASE_OUTPUT_DIR = "video_segments"          # Top-level directory for all outputs.
+    SEGMENT_DURATION = 5                        # Target duration for each HLS segment in seconds.
+    VIDEO_FRAMERATE = 30 # Assumed framerate for GOP calculation. Adjust if your source differs.
+                         # Use 'ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 your_video.mp4'
+                         # to get the actual framerate (e.g., 30000/1001 for 29.97fps).
 
+    # --- Select an ABR ladder configuration ---
+    # Set to True for a 5-level ladder (includes 2160p, 360p).
+    # Set to False for a 3-level ladder (1080p, 720p, 480p as previously defined).
+    USE_FIVE_LEVELS_LADDER = True # Modify this to switch configurations.
+
+    # --- Basic check for source video ---
     if not os.path.exists(SOURCE_VIDEO_FILE):
-        logger.error(f"源视频文件 '{SOURCE_VIDEO_FILE}' 未找到。")
+        logger.error(f"Source video file '{SOURCE_VIDEO_FILE}' not found. Please check the path. Exiting.")
     else:
         video_name_no_ext = os.path.splitext(os.path.basename(SOURCE_VIDEO_FILE))[0]
-        # 特定视频的输出根目录，主M3U8将存放在这里，例如: "video_segments/bbb_sunflower"
+        # Define the root output directory for this specific video's processed files.
+        # The master M3U8 playlist will be placed here.
+        # Example: "video_segments_output/bbb_sunflower/"
         output_dir_for_this_video = os.path.join(BASE_OUTPUT_DIR, video_name_no_ext)
 
-        # --- 定义不同质量的转码参数和信息 ---
-        # !! 再次提醒: 请用 ffprobe 检查你的源视频，确认正确的音频流索引用在 -map 指令中
-        # !! 例如，如果想用的音频是第一个音频流，则用 '-map', '0:a:0'
-        # !! 如果是全局索引为1的流 (假设视频是0)，则用 '-map', '0:1'
-        
-        qualities_config = [
-            {
-                'suffix': "480p-1500k",
+        # --- Comprehensive ABR Ladder Configuration ---
+        # This dictionary defines all available quality profiles.
+        # The script will select a subset of these based on USE_FIVE_LEVELS_LADDER.
+        #
+        # IMPORTANT NOTES ON FFmpeg OPTIONS:
+        # - '-map 0:v:0 -map 0:a:0': Assumes the primary video and audio are the first of their type.
+        #   ALWAYS verify with 'ffprobe' for your specific source video.
+        # - '-g <GOP_size>': Group of Pictures size. Typically 2x framerate for HLS.
+        # - '-keyint_min <min_keyframe_interval>': Minimum keyframe interval. Usually same as framerate.
+        # - '-preset': Controls encoding speed vs. compression efficiency. 'fast' is a common balance.
+        #   Other options: 'ultrafast', 'superfast', 'veryfast', 'faster', 'medium', 'slow', 'slower', 'veryslow'.
+        # - Codecs string: 'avc1...' for H.264, 'mp4a.40.2' for AAC-LC. These should match your encoding.
+        #   The hex part in 'avc1...' (e.g., 64001e) indicates profile and level.
+        #   Consult H.264 documentation or use tools to determine correct values if changing profiles/levels.
+
+        all_quality_profiles = {
+            "360p-800k": {
                 'ffmpeg_opts': [
-                    '-map', '0:v:0', '-map', '0:a:0', # !! 假设第一个音频流是你想要的
-                    '-c:v', 'libx264', '-b:v', '1500k', '-s', '854x480', 
-                    '-preset', 'fast', '-g', str(VIDEO_FRAMERATE * 2), 
+                    '-map', '0:v:0', '-map', '0:a:0',
+                    '-c:v', 'libx264', '-b:v', '800k', '-maxrate', '856k', '-bufsize', '1200k', '-s', '640x360',
+                    '-preset', 'fast', '-g', str(VIDEO_FRAMERATE * 2),
+                    '-keyint_min', str(VIDEO_FRAMERATE), '-sc_threshold', '0',
+                    '-c:a', 'aac', '-b:a', '64k', '-ar', '44100', '-ac', '2'
+                ],
+                'bandwidth': 800000 + 64000, # Total estimated bandwidth (video + audio)
+                'resolution': '640x360',
+                'codecs': "avc1.42c01e,mp4a.40.2" # H.264 Baseline@L3.0, AAC-LC
+            },
+            "480p-1500k": {
+                'ffmpeg_opts': [
+                    '-map', '0:v:0', '-map', '0:a:0',
+                    '-c:v', 'libx264', '-b:v', '1500k', '-maxrate', '1605k', '-bufsize', '2250k', '-s', '854x480',
+                    '-preset', 'fast', '-g', str(VIDEO_FRAMERATE * 2),
                     '-keyint_min', str(VIDEO_FRAMERATE), '-sc_threshold', '0',
                     '-c:a', 'aac', '-b:a', '96k', '-ar', '44100', '-ac', '2'
                 ],
-                'bandwidth': 1500000 + 96000, 
+                'bandwidth': 1500000 + 96000,
                 'resolution': '854x480',
-                'codecs': "avc1.64001e,mp4a.40.2" # 示例: H.264 Main@L3.0, AAC-LC
+                'codecs': "avc1.4d001e,mp4a.40.2" # H.264 Main@L3.0, AAC-LC (example, adjust if needed)
             },
-            {
-                'suffix': "720p-4000k",
+            "720p-4000k": {
                 'ffmpeg_opts': [
-                    '-map', '0:v:0', '-map', '0:a:0', # !! 假设第一个音频流是你想要的
-                    '-c:v', 'libx264', '-b:v', '4000k', '-s', '1280x720',
-                    '-preset', 'fast', '-g', str(VIDEO_FRAMERATE * 2), 
+                    '-map', '0:v:0', '-map', '0:a:0',
+                    '-c:v', 'libx264', '-b:v', '4000k', '-maxrate', '4280k', '-bufsize', '6000k', '-s', '1280x720',
+                    '-preset', 'fast', '-g', str(VIDEO_FRAMERATE * 2),
                     '-keyint_min', str(VIDEO_FRAMERATE), '-sc_threshold', '0',
                     '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2'
                 ],
                 'bandwidth': 4000000 + 128000,
                 'resolution': '1280x720',
-                'codecs': "avc1.64001f,mp4a.40.2" # 示例: H.264 Main@L3.1, AAC-LC
+                'codecs': "avc1.4d001f,mp4a.40.2" # H.264 Main@L3.1, AAC-LC
             },
-            {
-                'suffix': "1080p-8000k",
+            "1080p-8000k": {
                 'ffmpeg_opts': [
-                    '-map', '0:v:0', '-map', '0:a:0', # !! 假设第一个音频流是你想要的
-                    '-c:v', 'libx264', '-b:v', '8000k', '-s', '1920x1080',
-                    '-preset', 'fast', '-g', str(VIDEO_FRAMERATE * 2), 
+                    '-map', '0:v:0', '-map', '0:a:0',
+                    '-c:v', 'libx264', '-b:v', '8000k', '-maxrate', '8560k', '-bufsize', '12000k', '-s', '1920x1080',
+                    '-preset', 'fast', '-g', str(VIDEO_FRAMERATE * 2),
                     '-keyint_min', str(VIDEO_FRAMERATE), '-sc_threshold', '0',
                     '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '2'
                 ],
                 'bandwidth': 8000000 + 192000,
                 'resolution': '1920x1080',
-                'codecs': "avc1.640028,mp4a.40.2" # 示例: H.264 Main@L4.0, AAC-LC
+                'codecs': "avc1.640028,mp4a.40.2" # H.264 High@L4.0, AAC-LC
+            },
+            "2160p-16000k": { # 4K UHD
+                'ffmpeg_opts': [
+                    '-map', '0:v:0', '-map', '0:a:0',
+                    '-c:v', 'libx264', '-b:v', '16000k', '-maxrate', '17120k', '-bufsize', '24000k', '-s', '3840x2160',
+                    '-preset', 'fast', # Consider 'medium' or 'slow' for 4K if quality is paramount and time allows
+                    '-g', str(VIDEO_FRAMERATE * 2),
+                    '-keyint_min', str(VIDEO_FRAMERATE), '-sc_threshold', '0',
+                    '-c:a', 'aac', '-b:a', '256k', '-ar', '44100', '-ac', '2'
+                ],
+                'bandwidth': 16000000 + 256000,
+                'resolution': '3840x2160',
+                'codecs': "avc1.640033,mp4a.40.2" # Example: H.264 High@L5.1 or L5.2. Check FFmpeg output for actual profile/level.
             }
-        ]
-        
-        # 用于传递给主M3U8生成函数的信息列表
-        master_playlist_qualities_info = []
+        }
 
-        for config in qualities_config:
-            logger.info(f"--- 开始处理质量: {config['suffix']} ---")
-            # 调用 segment_video 生成该质量的媒体M3U8和TS分片
-            # output_dir 是顶级目录，segment_video内部会创建 video_name/quality_suffix
-            media_m3u8_path = segment_video(
-                SOURCE_VIDEO_FILE, 
-                BASE_OUTPUT_DIR, 
+        # Select which quality profiles to process based on the flag.
+        if USE_FIVE_LEVELS_LADDER:
+            # Define the order of qualities for the 5-level ladder.
+            # This order also influences the order in the master M3U8 if not sorted by bandwidth later.
+            active_quality_keys = ["360p-800k", "480p-1500k", "720p-4000k", "1080p-8000k", "2160p-16000k"]
+            logger.info("Configuration selected: 5 quality levels for segmentation.")
+        else:
+            active_quality_keys = ["480p-1500k", "720p-4000k", "1080p-8000k"]
+            logger.info("Configuration selected: 3 quality levels for segmentation.")
+
+        # Prepare the list of quality configurations to actually process.
+        qualities_to_process_list = []
+        for key in active_quality_keys:
+            if key in all_quality_profiles:
+                # Create a copy and add the 'suffix' key for convenience.
+                profile_config = all_quality_profiles[key].copy()
+                profile_config['suffix'] = key # The suffix is the key itself.
+                qualities_to_process_list.append(profile_config)
+            else:
+                logger.warning(f"Configuration for quality profile key '{key}' not found in 'all_quality_profiles'. Skipping.")
+
+        # This list will store details needed for generating the master M3U8 playlist.
+        master_playlist_variant_streams = []
+
+        # Process each selected quality profile.
+        for profile_config_item in qualities_to_process_list:
+            current_quality_suffix = profile_config_item['suffix']
+            logger.info(f"--- Starting processing for quality profile: {current_quality_suffix} ---")
+
+            # Call the segmentation function for the current profile.
+            media_m3u8_path_generated = segment_video(
+                video_path=SOURCE_VIDEO_FILE,
+                output_dir=BASE_OUTPUT_DIR, # segment_video will create subdirs based on video_name and suffix
                 segment_duration=SEGMENT_DURATION,
-                quality_suffix=config['suffix'], 
-                ffmpeg_encoder_options=config['ffmpeg_opts']
+                quality_suffix=current_quality_suffix,
+                ffmpeg_encoder_options=profile_config_item['ffmpeg_opts']
             )
-            
-            if media_m3u8_path: # 如果成功生成
-                master_playlist_qualities_info.append({
-                    'suffix': config['suffix'],
-                    'bandwidth': config['bandwidth'],
-                    'resolution': config.get('resolution'),
-                    # 主播放列表需要的是媒体M3U8的文件名，而不是完整路径
-                    'media_m3u8_filename': os.path.basename(media_m3u8_path), 
-                    'codecs': config.get('codecs') 
-                })
-            logger.info(f"--- 完成处理质量: {config['suffix']} ---")
 
-        if master_playlist_qualities_info:
-            logger.info("--- 开始创建主 M3U8 播放列表 ---")
+            if media_m3u8_path_generated: # If segmentation was successful for this profile
+                master_playlist_variant_streams.append({
+                    'suffix': current_quality_suffix,
+                    'bandwidth': profile_config_item['bandwidth'],
+                    'resolution': profile_config_item.get('resolution'),
+                    'media_m3u8_filename': os.path.basename(media_m3u8_path_generated),
+                    'codecs': profile_config_item.get('codecs')
+                })
+            else:
+                logger.error(f"Segmentation failed for quality profile: {current_quality_suffix}. "
+                             "This profile will be excluded from the master playlist.")
+            logger.info(f"--- Finished processing for quality profile: {current_quality_suffix} ---")
+
+        # After processing all selected quality profiles, create the master M3U8 playlist.
+        if master_playlist_variant_streams:
+            logger.info("--- Starting master M3U8 playlist creation ---")
             create_master_playlist(
-                output_dir_for_this_video, # 主M3U8存放在 "video_segments/video_name/"
-                master_playlist_qualities_info
+                output_video_base_dir=output_dir_for_this_video,
+                qualities_details_list=master_playlist_variant_streams
+                # master_m3u8_filename defaults to "master.m3u8"
             )
         else:
-            logger.info("没有成功生成任何质量的媒体流，因此不创建主M3U8。")
+            logger.warning(
+                "No media streams were successfully generated after processing all selected profiles. "
+                "The master M3U8 playlist will not be created."
+            )
+        logger.info("All HLS segmentation processing finished.")

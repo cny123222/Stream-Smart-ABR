@@ -178,7 +178,7 @@ bbb_sunflower_1080p_30fps_normal.mp4
 bbb_sunflower.mp4
 
 # video segements
-video_segments/
+video_segments*/
 
 # server log
 transmission_log*.txt

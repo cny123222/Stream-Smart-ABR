@@ -6,7 +6,9 @@
 
 - **Big Buck Bunny** (大雄兔)是一个非常经典的测试动画片
 - 资源来自 Blender Foundation 的开放电影
-- 我们使用的是 **1080p_30fps** 的版本作为高质量母片，大小约 **276.1MB**
+- 我们使用的是 **2160p_30fps** 的版本作为高质量母片
+- [点击此处下载](https://download.blender.org/demo/movies/BBB/bbb_sunflower_2160p_30fps_normal.mp4.zip)
+- 也可以使用 **1080p_30fps** 的版本
 - [点击此处下载](https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip)
 - 下载后，视频文件放在项目的根文件夹下，并重命名为 `bbb_sunflower.mp4`
 
@@ -29,16 +31,6 @@ python src/server.py
 2. 若失败，尝试更换监听端口号
 
 ## 客户端
-
-### 下载 VLC 播放器
-
-1. 从 [VideoLAN 官方网站](https://www.videolan.org/vlc/) 下载并安装最新稳定版的 VLC 播放器
-2. 找到 VLC 的安装目录（如 `C:\Program Files\VideoLAN\VLC\`），将其添加到 PATH
-
-### 安装 vlc 库
-```bash
-pip install python-vlc
-```
 
 ### 客户端运行
 
