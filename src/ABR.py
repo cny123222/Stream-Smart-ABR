@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__) # 使用模块特定的日志记录器
 
 SOCKET_TIMEOUT_SECONDS = 10
 
-# ABR特定的全局变量，或者将其作为实例成员
-current_abr_algorithm_selected_media_m3u8_url_on_server = None # 最好作为实例变量或属性
+# ABR特定的全局变量
+current_abr_algorithm_selected_media_m3u8_url_on_server = None
 
 def parse_m3u8_attributes(attr_string):
     attributes = {}
@@ -133,7 +133,7 @@ class ABRManager:
         successful_downloads = [s for s in self.segment_download_stats if not s.get('error') and 'size' in s and 'duration' in s]
         if not successful_downloads: return self.estimated_bandwidth_bps
 
-        # 可以选择最近的N条，或者全部 (因为max_stats_history控制了数量)
+        # 选择最近的N条
         # relevant_stats = successful_downloads[-self.max_stats_history:] # 用全部记录的来平均
         relevant_stats = successful_downloads # 使用max_stats_history限制的总数
         
@@ -200,7 +200,7 @@ class ABRManager:
             logger.warning(f"Unknown ABR logic type: {self.logic_type}. Defaulting to bandwidth_buffer.")
             self._logic_bandwidth_buffer()
 
-    # --- 决策逻辑1: 只看带宽 ---
+    # --- 决策逻辑: 只看带宽 ---
     def _logic_bandwidth_only(self):
         if not self.available_streams or len(self.available_streams) <= 1: return
 
@@ -241,7 +241,7 @@ class ABRManager:
             logger.info(f"ABR DECISION (BW_ONLY): No change from level {current_level_index}.")
 
 
-    # --- 决策逻辑2: 看带宽和缓冲区 ---
+    # --- 决策逻辑: 看带宽和缓冲区 ---
     def _logic_bandwidth_buffer(self):
         if not self.available_streams or len(self.available_streams) <= 1: return
 
@@ -315,7 +315,7 @@ class ABRManager:
             logger.info(f"ABR DECISION (BW_BUFFER): No change from level {current_level_index}. Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
 
 
-    # --- 决策逻辑3: 增强的缓冲区响应和带宽估计 ---
+    # --- 决策逻辑: 增强的缓冲区响应和带宽估计 ---
     def _logic_enhanced_buffer_response(self):
         if not self.available_streams or len(self.available_streams) <= 1: return
 
