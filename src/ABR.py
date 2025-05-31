@@ -5,12 +5,12 @@ import re
 import requests
 from urllib.parse import urljoin
 
-logger = logging.getLogger(__name__) # Use module-specific logger
+logger = logging.getLogger(__name__) # 使用模块特定的日志记录器
 
 SOCKET_TIMEOUT_SECONDS = 10
 
-# ABR-specific globals or make them instance members
-current_abr_algorithm_selected_media_m3u8_url_on_server = None # Better as instance var or property
+# ABR特定的全局变量，或者将其作为实例成员
+current_abr_algorithm_selected_media_m3u8_url_on_server = None # 最好作为实例变量或属性
 
 def parse_m3u8_attributes(attr_string):
     attributes = {}
@@ -23,7 +23,7 @@ def parse_m3u8_attributes(attr_string):
     except Exception as e: logger.error(f"Error parsing M3U8 attributes: {e}")
     return attributes
 
-# Function to fetch initial master m3u8 for ABRManager setup
+# 用于ABRManager设置的获取初始主m3u8的函数
 def fetch_master_m3u8_for_abr_init(master_m3u8_url_on_server):
     logger.info(f"ABR_INIT: Fetching master M3U8 from: {master_m3u8_url_on_server}")
     try:
@@ -36,7 +36,7 @@ def fetch_master_m3u8_for_abr_init(master_m3u8_url_on_server):
         line = lines[i].strip()
         if line.startswith("#EXT-X-STREAM-INF:"):
             attributes_str = line.split(":", 1)[1]
-            attributes = parse_m3u8_attributes(attributes_str) # Use your parse_m3u8_attributes
+            attributes = parse_m3u8_attributes(attributes_str) # 使用parse_m3u8_attributes
             if i + 1 < len(lines):
                 media_playlist_relative_url = lines[i+1].strip()
                 media_playlist_absolute_url_on_origin = urljoin(master_m3u8_base_url, media_playlist_relative_url)
@@ -52,10 +52,10 @@ def fetch_master_m3u8_for_abr_init(master_m3u8_url_on_server):
 class ABRManager:
     instance = None
 
-    # --- 新增：定义决策逻辑的枚举或常量 ---
+    # --- 定义决策逻辑的枚举或常量 ---
     LOGIC_TYPE_BANDWIDTH_ONLY = "bandwidth_only"
     LOGIC_TYPE_BANDWIDTH_BUFFER = "bandwidth_buffer"
-    LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE = "enhanced_buffer_response" # 新的、更积极响应缓冲区的逻辑
+    LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE = "enhanced_buffer_response" # 积极响应缓冲区的逻辑
 
     def __init__(self, available_streams_from_master, broadcast_abr_decision_callback,
                  broadcast_bw_estimate_callback=None,
@@ -72,7 +72,7 @@ class ABRManager:
         self.broadcast_bw_estimate = broadcast_bw_estimate_callback
         self.current_stream_index_by_abr = 0
         self.segment_download_stats = []
-        self.max_stats_history = 5 # 你之前用的是20，但对于快速响应，可以考虑减小，或根据逻辑调整
+        self.max_stats_history = 5 
         self.estimated_bandwidth_bps = 0
         # self.safety_factor = 0.8 # 各个逻辑内部可以有自己的安全系数
 
@@ -82,44 +82,42 @@ class ABRManager:
         self._current_selected_url_for_logging = None
         self.current_player_buffer_s = 0.0
 
-        # --- 新增：存储选择的决策逻辑类型 ---
+        # --- 存储选择的决策逻辑类型 ---
         self.logic_type = logic_type
-        logger.info(f"ABRManager initialized with logic type: {self.logic_type}")
-        # ---
+        logger.info(f"ABRManager初始化，使用逻辑类型: {self.logic_type}")
 
-        # ... (其余初始化代码，如日志、广播初始决策等保持不变) ...
         if self.available_streams: #
-            self._update_current_abr_selected_url_logging() #
-        self.broadcast_abr_decision(self.current_stream_index_by_abr) #
+            self._update_current_abr_selected_url_logging()
+        self.broadcast_abr_decision(self.current_stream_index_by_abr)
 
 
-    def _update_current_abr_selected_url_logging(self): # 和你之前的一样
+    def _update_current_abr_selected_url_logging(self):
         with self._internal_lock:
             if self.available_streams and 0 <= self.current_stream_index_by_abr < len(self.available_streams):
                 self._current_selected_url_for_logging = self.available_streams[self.current_stream_index_by_abr]['url']
             else:
                 self._current_selected_url_for_logging = None
 
-    def add_segment_download_stat(self, url, size_bytes, duration_seconds): # 和你之前的一样
+    def add_segment_download_stat(self, url, size_bytes, duration_seconds):
         if duration_seconds > 0.0001:
-            # --- 新增：记录下载开始和结束时间，用于更高级的带宽估计 ---
+            # --- 记录下载开始和结束时间，用于更高级的带宽估计 ---
             download_end_time = time.time()
             download_start_time = download_end_time - duration_seconds
             self.segment_download_stats.append({
                 'url': url,
                 'size': size_bytes,
                 'duration': duration_seconds,
-                'start_time': download_start_time, # 用于判断是否“最近”
-                'end_time': download_end_time,     # 用于判断是否“最近”
+                'start_time': download_start_time, # 用于判断是否"最近"
+                'end_time': download_end_time,     # 用于判断是否"最近"
                 'throughput_bps': (size_bytes * 8) / duration_seconds
             })
-            # ---
-            if len(self.segment_download_stats) > self.max_stats_history: # 你可以根据需要调整这里的max_stats_history
+
+            if len(self.segment_download_stats) > self.max_stats_history: # 根据需要调整这里的max_stats_history
                 self.segment_download_stats.pop(0)
 
-    def report_download_error(self, url): # 和你之前的一样
+    def report_download_error(self, url):
         logger.warning(f"ABR: Reported download error for segment from URL: {url}")
-        # --- 新增：错误报告也可以加入统计，用于某些决策逻辑 ---
+        # --- 错误报告加入统计，用于某些决策逻辑 ---
         self.segment_download_stats.append({
             'url': url,
             'error': True,
@@ -127,17 +125,16 @@ class ABRManager:
         })
         if len(self.segment_download_stats) > self.max_stats_history:
             self.segment_download_stats.pop(0)
-        # ---
 
-    def _estimate_bandwidth_simple_average(self): # 你之前的带宽估计方法
+    def _estimate_bandwidth_simple_average(self): # 带宽估计方法
         if not self.segment_download_stats: return self.estimated_bandwidth_bps # 返回上一次的值或0
         
         # 只考虑成功的下载
         successful_downloads = [s for s in self.segment_download_stats if not s.get('error') and 'size' in s and 'duration' in s]
         if not successful_downloads: return self.estimated_bandwidth_bps
 
-        # 可以选择最近的N条，或者全部 (这里用全部，因为max_stats_history控制了数量)
-        # relevant_stats = successful_downloads[-self.max_stats_history:] # 如果想用全部记录的来平均
+        # 可以选择最近的N条，或者全部 (因为max_stats_history控制了数量)
+        # relevant_stats = successful_downloads[-self.max_stats_history:] # 用全部记录的来平均
         relevant_stats = successful_downloads # 使用max_stats_history限制的总数
         
         if not relevant_stats: return self.estimated_bandwidth_bps
@@ -153,10 +150,10 @@ class ABRManager:
             self.broadcast_bw_estimate(self.estimated_bandwidth_bps / 1_000_000) # 发送Mbps
         return self.estimated_bandwidth_bps
 
-    # --- 新增：一个稍微增强的带宽估计，对近期和突变响应更快一点 (示例) ---
+    # --- 增强的带宽估计 ---
     def _estimate_bandwidth_enhanced(self):
-        # 这个方法可以更复杂，例如使用谐波平均值，或者对最近的片段赋予更高权重
-        # 这里我们简单实现一个：如果最近一个片段下载速度远低于平均，则临时拉低平均值
+        # 对最近的片段赋予更高权重
+        # 如果最近一个片段下载速度远低于平均，则临时拉低平均值
         
         current_avg_bps = self._estimate_bandwidth_simple_average() # 先获取简单平均
 
@@ -169,25 +166,25 @@ class ABRManager:
         last_segment_throughput_bps = last_segment_info['throughput_bps']
 
         # 如果最近一次下载速度显著低于当前平均，且平均值大于0
-        if current_avg_bps > 0 and last_segment_throughput_bps < current_avg_bps * 0.5: # 例如，低于平均一半
+        if current_avg_bps > 0 and last_segment_throughput_bps < current_avg_bps * 0.5: # 低于平均一半
             logger.warning(f"ABR Enhanced BW: Last segment throughput ({last_segment_throughput_bps/1000:.0f} Kbps) "
                            f"is much lower than average ({current_avg_bps/1000:.0f} Kbps). Adjusting estimate downwards.")
-            # 更激进地降低估算，例如取最近一次和平均值的一个较小比例的组合
+            # 更激进地降低估算，取最近一次和平均值的一个较小比例的组合
             adjusted_bps = (last_segment_throughput_bps * 0.7) + (current_avg_bps * 0.3)
             self.estimated_bandwidth_bps = adjusted_bps # 更新主估算值
             if self.broadcast_bw_estimate and adjusted_bps > 0:
                 self.broadcast_bw_estimate(adjusted_bps / 1_000_000) # 发送Mbps
             return adjusted_bps
         
-        # 否则，正常返回简单平均值 (或者可以加入对持续高速的奖励等)
+        # 否则，正常返回简单平均值
         return current_avg_bps
 
 
-    def update_player_buffer_level(self, buffer_seconds): # 和你之前的一样
+    def update_player_buffer_level(self, buffer_seconds):
         with self._internal_lock:
             self.current_player_buffer_s = buffer_seconds
 
-    def get_current_abr_decision_url(self): # 和你之前的一样
+    def get_current_abr_decision_url(self):
         with self._internal_lock:
             return self._current_selected_url_for_logging
 
@@ -203,7 +200,7 @@ class ABRManager:
             logger.warning(f"Unknown ABR logic type: {self.logic_type}. Defaulting to bandwidth_buffer.")
             self._logic_bandwidth_buffer()
 
-    # --- 决策逻辑1: 只看带宽 (简化版，类似你最初的) ---
+    # --- 决策逻辑1: 只看带宽 ---
     def _logic_bandwidth_only(self):
         if not self.available_streams or len(self.available_streams) <= 1: return
 
@@ -231,7 +228,7 @@ class ABRManager:
                 break
         
         if next_best_index != current_level_index:
-            # ... (广播决策的代码，与你之前版本类似，此处省略以保持简洁，但你需要实现它) ...
+            # ... 广播决策的代码 ...
             old_stream_info = self.available_streams[current_level_index]
             self.current_stream_index_by_abr = next_best_index
             new_stream_info = self.available_streams[self.current_stream_index_by_abr]
@@ -244,7 +241,7 @@ class ABRManager:
             logger.info(f"ABR DECISION (BW_ONLY): No change from level {current_level_index}.")
 
 
-    # --- 决策逻辑2: 看带宽和缓冲区 (你上一轮测试的逻辑) ---
+    # --- 决策逻辑2: 看带宽和缓冲区 ---
     def _logic_bandwidth_buffer(self):
         if not self.available_streams or len(self.available_streams) <= 1: return
 
@@ -318,7 +315,7 @@ class ABRManager:
             logger.info(f"ABR DECISION (BW_BUFFER): No change from level {current_level_index}. Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
 
 
-    # --- 决策逻辑3: 增强的缓冲区响应和带宽估计 (新的) ---
+    # --- 决策逻辑3: 增强的缓冲区响应和带宽估计 ---
     def _logic_enhanced_buffer_response(self):
         if not self.available_streams or len(self.available_streams) <= 1: return
 
@@ -333,12 +330,11 @@ class ABRManager:
             f"Current Level Idx: {current_level_index}"
         )
 
-        # 定义阈值 (可以与 BW_BUFFER 逻辑中的不同，或者更细化)
-        # 例如，更敏感的低缓冲区阈值，和用于“耐心等待”的阈值
+        # 定义阈值 (可以与 BW_BUFFER 逻辑中的不同)
         BUFFER_LOW_WARNING = 10.0  # s, 警告阈值，低于此值应更积极考虑降级
         BUFFER_LOW_CRITICAL = 5.0  # s, 危险阈值，强烈建议降级，甚至跳级
         BUFFER_HIGH_SAFE = 20.0    # s, 安全阈值，高于此值且带宽允许时可考虑升级
-        BUFFER_STABLE_TARGET = 15.0 # s, 期望的稳定缓冲目标 (用于更细致的调整，此版本可能不用)
+        BUFFER_STABLE_TARGET = 15.0 # s, 期望的稳定缓冲目标 (用于更细致的调整)
 
         # 带宽利用率和安全系数
         # safety_factor_normal = 0.85
@@ -348,7 +344,7 @@ class ABRManager:
         next_best_index = current_level_index # 默认保持当前
 
         # 1. 处理下载错误 (示例：如果最近有下载错误，则更保守)
-        #    你可以在 self.segment_download_stats 中检查 'error': True 的记录
+        #    在 self.segment_download_stats 中检查 'error': True 的记录
         recent_errors = [s for s in self.segment_download_stats if s.get('error') and time.time() - s.get('time', 0) < 10] # 例如10秒内的错误
         if recent_errors:
             logger.warning(f"ABR LOGIC (ENHANCED): Recent download errors detected. Being more conservative.")
@@ -399,8 +395,8 @@ class ABRManager:
             logger.info(f"ABR LOGIC (ENHANCED): DOWNGRADE condition met. Buffer ({current_buffer_s:.2f}s), EstBW ({estimated_bw_bps/1000:.0f}Kbps). Potential idx: {new_idx}")
             next_best_index = new_idx
             
-        # 5. （可选）避免过于频繁的切换：可以加入一个计时器，两次切换之间至少间隔多久
-        #     例如: if time.time() - self.last_switch_time < MIN_INTERVAL_BETWEEN_SWITCHES: return
+        # 5. 避免过于频繁的切换：可以加入一个计时器，两次切换之间至少间隔多久
+        #     if time.time() - self.last_switch_time < MIN_INTERVAL_BETWEEN_SWITCHES: return
 
         if next_best_index != current_level_index:
             # ... (广播决策的代码) ...
@@ -416,7 +412,7 @@ class ABRManager:
             logger.info(f"ABR DECISION (ENHANCED): No change from level {current_level_index}. Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
 
 
-    def abr_loop(self): # 和你之前的一样
+    def abr_loop(self):
         logger.info(f"ABR Python Algo ({self.logic_type}) monitoring thread started.")
         time.sleep(3) # 初始等待，让播放器先缓冲一些
         while not self.stop_abr_event.is_set():
@@ -433,13 +429,13 @@ class ABRManager:
                 time.sleep(1)
         logger.info(f"ABR Python Algo ({self.logic_type}) monitoring thread stopped.")
 
-    def start(self): # 和你之前的一样
+    def start(self):
         self.stop_abr_event.clear()
         self.abr_thread = threading.Thread(target=self.abr_loop, daemon=True, name="PythonABRLogicThread")
         self.abr_thread.start()
 
-    def stop(self): # 和你之前的一样
+    def stop(self):
         if self.abr_thread and self.abr_thread.is_alive():
             self.stop_abr_event.set()
-            self.abr_thread.join(timeout=2.0) # 给线程一点时间干净地退出
+            self.abr_thread.join(timeout=2.0) # 给线程时间干净地退出
         ABRManager.instance = None # 清理实例

@@ -9,19 +9,20 @@ def read_aes_key(file_path: str) -> bytes:
     with open(file_path, 'rb') as f:  # 以二进制方式打开密钥文件
         key = f.read()  # 读取文件内容到key变量
     if len(key) not in (16, 32):  # 检查密钥长度是否为16或32字节
-        raise ValueError("AES密钥必须是16或32字节长")  # 如果不是，抛出异常
+        raise ValueError("AES key must be 16 or 32 bytes long")  # 如果不是，抛出异常
     return key  # 返回读取到的密钥
+
 # 预共享密钥（16字节=128位，或32字节=256位）
 try:
     key_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "aes.key")
     # 读取AES密钥，支持多操作系统的路径拼接
     AES_KEY = read_aes_key(str(key_path))
 except FileNotFoundError:
-    raise FileNotFoundError(f"AES密钥文件未找到: {key_path}")
+    raise FileNotFoundError(f"AES key file not found: {key_path}")
 except ValueError as ve:
-    raise ValueError(f"AES密钥读取错误: {ve}")
+    raise ValueError(f"AES key read error: {ve}")
 except Exception as e:
-    raise RuntimeError(f"读取AES密钥时发生未知错误: {e}")
+    raise RuntimeError(f"Unknown error occurred while reading AES key: {e}")
 
 def generate_iv():
     """生成16字节的随机IV"""
@@ -48,7 +49,6 @@ def aes_decrypt_cbc(iv_ciphertext: bytes, key: bytes) -> bytes:
     plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()  # 去除填充，得到原始明文
     return plaintext  # 返回明文
 
-# 示例用法
 if __name__ == "__main__":
     # 明文数据
     segment_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "video_segments", "bbb_sunflower", "480p-1500k", "bbb_sunflower-480p-1500k-000.ts")
