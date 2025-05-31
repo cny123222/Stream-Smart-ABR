@@ -1,2 +1,2 @@
-## GitHub项目协作教程见 github_tutorial.md，代码修改不要推送 `main` 分支
-## 服务端及客户端配置见 preprocess.md
+## 项目可以正常运行 欢迎美化 HTML & 其他 issues
+## 运行时建议最好关闭各种 VPN
