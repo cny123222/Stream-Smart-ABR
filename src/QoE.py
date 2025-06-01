@@ -1,7 +1,11 @@
 import time
 import logging
+import json
 
 logger = logging.getLogger(__name__) # Use module-specific logger
+
+quality = [0, 0.287682, 0.693147, 1.098612, 1.791759]
+psnr = [29.58124, 31.784398, 35.715179, 39.906998, 49.492304]
 
 # --- QoE Metrics Manager ---
 class QoEMetricsManager:
@@ -9,6 +13,7 @@ class QoEMetricsManager:
         self.startup_latency_ms = None
         self.rebuffering_events = [] # Stores {'start_ts': timestamp_ms, 'duration_ms': duration_ms, 'end_ts': timestamp_ms}
         self.quality_switches_log = [] # Stores {'timestamp': ms, 'from_level': idx, 'to_level': idx, 'to_bitrate': bps}
+        self.write_path = ''
         
         self.session_active = False
         self.session_start_time_ms = 0
@@ -19,17 +24,22 @@ class QoEMetricsManager:
         self.last_event_timestamp_ms = 0 # Used to calculate duration at current level before switch/end
         logger.info("QoEMetricsManager initialized.")
 
+    def set_write_path(self, path):
+        self.write_path = path
+
     def start_session_if_needed(self, event_timestamp_ms):
         if not self.session_active:
             self.session_active = True
             self.session_start_time_ms = event_timestamp_ms # Session starts with the first significant event
             self.last_event_timestamp_ms = event_timestamp_ms
+            self.current_level_index = 0
             logger.info(f"QoE: Playback session started around {event_timestamp_ms}.")
 
     def update_time_at_level(self, event_timestamp_ms):
         if self.session_active and self.current_level_index != -1:
             duration_at_current_level_ms = event_timestamp_ms - self.last_event_timestamp_ms
             if duration_at_current_level_ms > 0:
+                print('oooooooo ', self.current_level_index, duration_at_current_level_ms, ' oooooooo')
                 self.time_at_each_level[self.current_level_index] = \
                     self.time_at_each_level.get(self.current_level_index, 0) + duration_at_current_level_ms
         self.last_event_timestamp_ms = event_timestamp_ms
@@ -43,16 +53,18 @@ class QoEMetricsManager:
             self.last_event_timestamp_ms = timestamp_ms # Update last event time after startup
 
     def record_rebuffering_start(self, timestamp_ms):
+        print('wuwuwuwuwuwuwuwu', timestamp_ms)
         self.start_session_if_needed(timestamp_ms)
         self.update_time_at_level(timestamp_ms)
         self.rebuffering_events.append({'start_ts': timestamp_ms, 'duration_ms': 0, 'end_ts': None}) # duration will be updated
         logger.info(f"QoE Event: Rebuffering Started at {timestamp_ms}")
 
-    def record_rebuffering_end(self, duration_ms, timestamp_ms):
+    def record_rebuffering_end(self, timestamp_ms):
         self.start_session_if_needed(timestamp_ms) # Should already be active
         # Find the last open rebuffering event
         for event in reversed(self.rebuffering_events):
             if event['end_ts'] is None:
+                duration_ms = timestamp_ms - event['start_ts']
                 event['duration_ms'] = duration_ms
                 event['end_ts'] = timestamp_ms
                 logger.info(f"QoE Event: Rebuffering Ended. Duration = {duration_ms} ms (at {timestamp_ms})")
@@ -155,3 +167,38 @@ class QoEMetricsManager:
             rebuffering_ratio = (total_stall_duration / self.total_session_duration_ms) * 100 if self.total_session_duration_ms > 0 else 0
             logger.info(f"  Rebuffering Ratio (approx): {rebuffering_ratio:.2f}%")
         logger.info("--------------------")
+        status = {
+            'quality': 0.0,
+            'effective_ratio': (self.total_session_duration_ms - total_stall_duration - self.startup_latency_ms if self.startup_latency_ms is not None else 0) / self.total_session_duration_ms if self.total_session_duration_ms > 0 else 1,
+            'weighted_quality': 0.0,
+            'switch_count': f'{len(self.quality_switches_log)}',
+            'PSNR': 0.0,
+            'rebuffering_counts': f'{num_stalls}',
+            'rebuffering_duration': f'{total_stall_duration:.2f} ms',
+            'total_duration': f'{self.total_session_duration_ms:.2f} ms', 
+            'rebuffering_ratio': f'{rebuffering_ratio:.2f}%',
+            'startup_latency': f'{self.startup_latency_ms:.2f} ms' if self.startup_latency_ms is not None else 'Not recorded',
+            'time_at_each_level': {
+                '0': 0,
+                '1': 0, 
+                '2': 0,
+                '3': 0,
+                '4': 0
+            },
+            'switching_events': self.quality_switches_log,
+            'rebuffering_events': self.rebuffering_events
+        }
+        tot = 0.0
+        quality_val = 0.0
+        psnr_val = 0.0
+        for level_idx, duration_ms in self.time_at_each_level.items():
+            status['time_at_each_level'][str(level_idx)] = duration_ms
+            tot += duration_ms
+            quality_val += quality[level_idx] * duration_ms
+            psnr_val += psnr[level_idx] * duration_ms
+        if tot > 0:
+            status['quality'] = 1.0 * quality_val / tot
+            status['PSNR'] = 1.0 * psnr_val / tot
+        status['weighted_quality'] = 1.0 * status['quality'] + 1.5 * status['effective_ratio']
+        with open(self.write_path, 'a', encoding='utf-8') as f:
+            json.dump(status, f, ensure_ascii=False, indent=4)

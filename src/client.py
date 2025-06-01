@@ -18,8 +18,10 @@ import AES # Your AES decryption module
 from ABR import ABRManager, fetch_master_m3u8_for_abr_init
 from QoE import QoEMetricsManager # Your QoE metrics manager
 import network_simulator # Your network simulation module
+import argparse
 
 # --- Configuration ---
+REBUFFERING = False
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 8081
 LOCAL_PROXY_HOST = '127.0.0.1'
@@ -51,7 +53,7 @@ qoe_manager = QoEMetricsManager()
 
 # --- WebSocket Server Functions (handle_websocket_client needs to route QoE messages) ---
 async def handle_websocket_client(websocket):
-    global g_connected_websocket_clients
+    global g_connected_websocket_clients, REBUFFERING
     client_identifier = getattr(websocket, 'path', None)
     if client_identifier is None:
         try: client_identifier = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
@@ -66,15 +68,24 @@ async def handle_websocket_client(websocket):
                 message = json.loads(message_str)
                 if message.get("type") == "QOE_EVENT":
                     event_data = message.get("data", {})
+                    print('--------------  ', event_data, ' -----------awawa')
                     event_name = event_data.get("event")
+                    if event_data.get("value") is not None and event_data.get("value") < 1.0 and not REBUFFERING:
+                        REBUFFERING = True
+                        event_name = "REBUFFERING_START"
+                    elif event_data.get("value") is not None and event_data.get("value") >= 1.0 and REBUFFERING:
+                        REBUFFERING = False
+                        event_name = "REBUFFERING_END"
                     timestamp = event_data.get("timestamp", time.time() * 1000)
 
                     if event_name == "STARTUP_LATENCY":
                         qoe_manager.record_startup_latency(event_data.get("value"), timestamp)
                     elif event_name == "REBUFFERING_START":
+                        REBUFFERING = True
                         qoe_manager.record_rebuffering_start(timestamp)
                     elif event_name == "REBUFFERING_END":
-                        qoe_manager.record_rebuffering_end(event_data.get("duration"), timestamp)
+                        REBUFFERING = False
+                        qoe_manager.record_rebuffering_end(timestamp)
                     elif event_name == "QUALITY_SWITCH":
                         qoe_manager.record_quality_switch(
                             event_data.get("fromLevel"),
@@ -486,6 +497,25 @@ def stop_proxy_server(): # Same
 def main():
     def main():
         global g_websocket_server_thread, g_asyncio_loop_for_websocket, qoe_manager
+
+    # 创建解析器对象
+    parser = argparse.ArgumentParser(description='Client application with two integer arguments')
+    # 添加第一个整数参数
+    parser.add_argument('arg1', type=int, help='abr_decision')
+    # 添加第二个整数参数
+    parser.add_argument('arg2', type=int, help='network_condition')
+    # 添加第三个字符串参数
+    parser.add_argument('arg3', type=str, help='write_path')
+    # 解析命令行参数
+    args = parser.parse_args()
+
+    abr_decision = args.arg1
+    # [1, 3]
+    net_decision = args.arg2
+    # [1, 8]
+    write_path = args.arg3
+
+    qoe_manager.set_write_path(write_path)
     abr_manager_instance = None
     scenario_player = None # Define scenario_player here for access in finally
 
@@ -514,7 +544,16 @@ def main():
         # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
         selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
         # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
-
+        if abr_decision == 1:
+            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
+        elif abr_decision == 2:
+            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+        elif abr_decision == 3:
+            selected_logic = ABRManager.LOGIC_TYPE_BUFFER_ONLY
+        else:
+            logger.error("Invalid ABR decision. Using default logic.")
+            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+            
         abr_manager_instance = ABRManager(
             available_streams,
             broadcast_abr_decision_callback=schedule_abr_broadcast,
@@ -528,7 +567,7 @@ def main():
     # --- Initialize and start the network scenario player ---
     logger.info("MAIN: Initializing and starting network scenario player...")
     network_simulator.set_bandwidth_update_callback(schedule_network_sim_status_broadcast)
-    scenario_player = network_simulator.create_default_simulation_scenario()
+    scenario_player = network_simulator.create_default_simulation_scenario(mode = net_decision)
     # Or, define a custom scenario:
     # scenario_player = network_simulator.NetworkScenarioPlayer()
     # scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10s full speed
