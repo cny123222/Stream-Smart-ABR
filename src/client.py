@@ -8,54 +8,56 @@ import http.server
 import socketserver
 import socket
 import webbrowser
-import json # For WebSocket messages
+import json # 用于WebSocket消息处理
 
-# --- WebSocket and AsyncIO ---
+# --- WebSocket和AsyncIO ---
 import asyncio
 import websockets
 
-import AES # Your AES decryption module
+import AES # AES解密模块
 from ABR import ABRManager, fetch_master_m3u8_for_abr_init
-from QoE import QoEMetricsManager # Your QoE metrics manager
-import network_simulator # Your network simulation module
+from QoE import QoEMetricsManager # QoE指标管理器
+import network_simulator # 网络模拟模块
 
-# --- Configuration ---
+# --- 配置 ---
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 8081
 LOCAL_PROXY_HOST = '127.0.0.1'
 LOCAL_PROXY_PORT = 8082
-WEBSOCKET_PORT = 8083 # Port for WebSocket server
-DOWNLOAD_DIR = "download" # Not heavily used with HLS.js direct playback
+WEBSOCKET_PORT = 8083 # WebSocket服务器端口
+DOWNLOAD_DIR = "download" # 在HLS.js直接播放时不常用
 SOCKET_TIMEOUT_SECONDS = 10
 VIDEO_TO_STREAM_NAME = "bbb_sunflower"
 HTML_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "player.html")
 
-# --- Logger Setup ---
+# --- 日志记录器设置 ---
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
                     handlers=[logging.StreamHandler()])
 logger = logging.getLogger('HLSJS_Client_With_QoE')
 
-# --- Local Proxy Server Globals ---
+# --- 本地代理服务器全局变量 ---
 g_local_proxy_server_instance = None
 g_proxy_runner_thread = None
 
-# --- WebSocket Server Globals ---
+# --- WebSocket服务器全局变量 ---
 g_connected_websocket_clients = set()
 g_websocket_server_thread = None
 g_asyncio_loop_for_websocket = None
-g_websocket_stop_event = None # Will be an asyncio.Event
+g_websocket_stop_event = None # 将是一个asyncio.Event
 
-# Global instance
+# 全局实例
 qoe_manager = QoEMetricsManager()
 
-# --- WebSocket Server Functions (handle_websocket_client needs to route QoE messages) ---
+# --- WebSocket服务器函数（handle_websocket_client需要路由QoE消息） ---
 async def handle_websocket_client(websocket):
     global g_connected_websocket_clients
     client_identifier = getattr(websocket, 'path', None)
     if client_identifier is None:
-        try: client_identifier = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
-        except Exception: client_identifier = "UnknownClient" # Fallback if remote_address also fails
+        try: 
+            client_identifier = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+        except Exception: 
+            client_identifier = "UnknownClient" # 如果remote_address也失败的备用方案
             
     logger.info(f"WebSocket client connected: {client_identifier}")
     g_connected_websocket_clients.add(websocket)
@@ -89,13 +91,13 @@ async def handle_websocket_client(websocket):
                         logger.debug(f"QoE Event from {client_identifier}: Buffer Update = {buffer_value_seconds:.2f}s at {timestamp}")
                         # 将缓冲区信息传递给 ABRManager
                         if ABRManager.instance:
-                            # 你需要在 ABRManager 中添加一个方法来接收这个值
+                            # 需要在ABRManager中添加一个方法来接收这个值
                             ABRManager.instance.update_player_buffer_level(buffer_value_seconds) 
                         else:
                             logger.warning("ABRManager instance not available to update buffer level.")
                     else:
                         logger.warning(f"Unknown QoE event name from {client_identifier}: {event_name}")
-                # else: # Could be ABR commands if you had bi-directional for other things
+                # else: # 如果有其他双向通信，可以处理非QoE消息
                 #     logger.debug(f"Received non-QoE message from {client_identifier}: {message_str}")
 
             except json.JSONDecodeError:
@@ -113,10 +115,10 @@ async def handle_websocket_client(websocket):
         logger.info(f"WebSocket client {client_identifier} removed from connected set.")
 
 async def run_websocket_server_async():
-    global g_asyncio_loop_for_websocket, g_websocket_stop_event # g_asyncio_loop_for_websocket is set by the calling thread
+    global g_asyncio_loop_for_websocket, g_websocket_stop_event # g_asyncio_loop_for_websocket由调用线程设置
 
-    # Sanity check: ensure the loop we think we are using is indeed the current running one
-    # This part is mostly for debugging/understanding; websockets.serve should use get_running_loop()
+    # 健全性检查：确保我们认为使用的循环确实是当前运行的循环
+    # 这部分主要用于调试；websockets.serve应该使用get_running_loop()
     try:
         current_loop = asyncio.get_running_loop()
         if g_asyncio_loop_for_websocket is not current_loop:
@@ -124,35 +126,35 @@ async def run_websocket_server_async():
                 f"run_websocket_server_async: g_asyncio_loop_for_websocket (id: {id(g_asyncio_loop_for_websocket)}) "
                 f"is not the current running loop (id: {id(current_loop)}). This might be an issue if not intended."
             )
-            # If start_websocket_server_in_thread correctly sets the loop for its thread,
-            # and then calls run_until_complete on that loop for this coroutine,
-            # then get_running_loop() within this coroutine should return that same loop.
+            # 如果start_websocket_server_in_thread正确设置了线程的循环，
+            # 然后在该循环上调用run_until_complete来执行此协程，
+            # 那么在此协程内get_running_loop()应该返回同一个循环。
     except RuntimeError:
         logger.error("run_websocket_server_async: No current asyncio loop running when expected!")
-        return # Cannot proceed without a loop
+        return # 没有循环无法继续
 
     if g_websocket_stop_event is None:
-        # Create the event within the context of the loop this coroutine is running on
+        # 在此协程运行的循环上下文中创建事件
         g_websocket_stop_event = asyncio.Event() 
 
     logger.info(f"Starting WebSocket server on ws://{LOCAL_PROXY_HOST}:{WEBSOCKET_PORT}")
     
     server_instance = None
     try:
-        # REMOVED: loop=g_asyncio_loop_for_websocket from the websockets.serve call
+        # 从websockets.serve调用中移除loop=g_asyncio_loop_for_websocket
         async with websockets.serve(handle_websocket_client, LOCAL_PROXY_HOST, WEBSOCKET_PORT) as server:
             server_instance = server 
             server_address = "N/A"
             if server.sockets:
                 try:
                     server_address = server.sockets[0].getsockname()
-                except Exception: # Handle cases where getsockname might not be available immediately or on all socket types
+                except Exception: # 处理getsockname可能无法立即获得或在所有套接字类型上不可用的情况
                     pass
             logger.info(f"WebSocket server '{server_address}' now serving.")
             await g_websocket_stop_event.wait() 
     except asyncio.CancelledError:
         logger.info("WebSocket server task (run_websocket_server_async) was cancelled.")
-    except Exception as e: # Catch other potential errors during serve()
+    except Exception as e: # 捕获serve()期间的其他潜在错误
         logger.error(f"Error during websockets.serve: {e}", exc_info=True)
     finally:
         if server_instance:
@@ -169,8 +171,7 @@ def start_websocket_server_in_thread():
     
     thread_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(thread_loop)
-    # This global variable now correctly holds the loop object
-    # that is exclusively managed by this WebSocket server thread.
+    # 这个全局变量现在正确保存了由此WebSocket服务器线程独占管理的循环对象。
     g_asyncio_loop_for_websocket = thread_loop 
 
     try:
@@ -182,24 +183,24 @@ def start_websocket_server_in_thread():
     finally:
         logger.info("WebSocket server thread: Cleaning up asyncio loop.")
         try:
-            # Attempt to cancel all remaining tasks in this specific loop
+            # 尝试取消此特定循环中的所有剩余任务
             all_tasks = asyncio.all_tasks(loop=thread_loop)
             if all_tasks:
                 logger.info(f"Cancelling {len(all_tasks)} outstanding asyncio tasks in WebSocket thread loop...")
                 for task in all_tasks:
-                    if not task.done() and not task.cancelled(): # Check if cancellation is needed
+                    if not task.done() and not task.cancelled(): # 检查是否需要取消
                         task.cancel()
-                # Wait for tasks to process cancellation
-                # This gather should be run by the loop itself.
-                # However, run_until_complete has exited.
-                # We might need to run gather within a short final run_until_complete if tasks need cleanup.
-                # For simplicity now, we assume cancellation is set.
+                # 等待任务处理取消
+                # 这个gather应该由循环本身运行。
+                # 但是，run_until_complete已经退出。
+                # 如果任务需要清理，我们可能需要在短暂的最终run_until_complete中运行gather。
+                # 为了简单起见，我们假设取消已设置。
                 # thread_loop.run_until_complete(asyncio.gather(*all_tasks, return_exceptions=True))
-                # This can be tricky if the loop is already stopping.
+                # 如果循环已经停止，这可能很棘手。
             
-            # If loop is stopping due to g_websocket_stop_event.set() -> run_until_complete finishes,
-            # then we proceed to close.
-            if thread_loop.is_running(): # Should not be true if run_until_complete exited cleanly
+            # 如果循环由于g_websocket_stop_event.set() -> run_until_complete完成而停止，
+            # 那么我们继续关闭。
+            if thread_loop.is_running(): # 如果run_until_complete干净退出，应该不为真
                 logger.warning("WebSocket thread loop still running unexpectedly during cleanup; attempting stop.")
                 thread_loop.stop()
             if not thread_loop.is_closed():
@@ -213,7 +214,7 @@ def start_websocket_server_in_thread():
 
 async def broadcast_message_async(message_str):
     if g_connected_websocket_clients:
-        # Create a list of tasks for sending messages to avoid issues if the set changes during iteration
+        # 创建发送消息的任务列表，避免在迭代期间集合发生变化的问题
         clients_to_send_to = list(g_connected_websocket_clients)
         tasks = [client.send(message_str) for client in clients_to_send_to]
         if tasks:
@@ -226,7 +227,7 @@ async def broadcast_message_async(message_str):
 def schedule_abr_broadcast(level_index):
     if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
         message = json.dumps({"type": "SET_LEVEL", "levelIndex": level_index})
-        # Schedule the async broadcast function to run in the WebSocket's asyncio loop
+        # 安排异步广播函数在WebSocket的asyncio循环中运行
         asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
     else:
         logger.warning("Cannot schedule ABR broadcast: WebSocket asyncio loop not available or not running.")
@@ -246,9 +247,8 @@ def schedule_network_sim_status_broadcast(status_data):
         logger.warning("Cannot schedule Network Sim Status broadcast: WebSocket asyncio loop not available or not running.")
 
 class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
-    # ... (do_GET, _rewrite_master_playlist, _rewrite_media_playlist remain largely the same) ...
-    # Ensure _rewrite_master_playlist provides ALL variants to HLS.js
-    # so HLS.js knows all available levels and their original order.
+    # 确保_rewrite_master_playlist向HLS.js提供所有变体
+    # 这样HLS.js知道所有可用级别及其原始顺序。
 
     def do_GET(self):
         log_adapter = logging.LoggerAdapter(logger, {'path': self.path})
@@ -289,8 +289,9 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                     response = requests.get(original_master_m3u8_url, timeout=SOCKET_TIMEOUT_SECONDS)
                     response.raise_for_status()
                     master_content = response.text
-                    # IMPORTANT: This rewrite MUST ensure all original variants are present,
-                    # so HLS.js knows all level indices. The URLs to media playlists are proxied.
+                    # 此重写必须确保所有原始变体都存在，
+                    # 这样HLS.js知道所有级别索引。
+                    # 媒体播放列表的URL被代理。
                     modified_master_content = self._rewrite_master_playlist(master_content, original_master_m3u8_url)
                     
                     self.send_response(200)
@@ -303,7 +304,6 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             if len(path_components) == 3 and path_components[0] == VIDEO_TO_STREAM_NAME and path_components[2].endswith(".m3u8"):
-                # ... (media playlist serving logic - same as before, rewrites TS to /decrypt_segment)
                 video_name_from_url = path_components[0]
                 quality_dir_from_url = path_components[1]
                 playlist_filename_from_url = path_components[2]
@@ -331,16 +331,16 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                 original_ts_url_on_server = unquote(original_ts_url_on_server_encoded)
                 segment_filename_for_log = original_ts_url_on_server.split('/')[-1]
                 
-                effective_segment_download_duration_for_abr = -1.0 # Initialize
-                data_size_bytes = 0 # Initialize
+                effective_segment_download_duration_for_abr = -1.0 # 初始化
+                data_size_bytes = 0 # 初始化
 
                 try:
-                    # Step 1: Fetch segment from origin
-                    # fetch_start_time = time.time() # Not strictly needed if ABR relies on proxy->client time
+                    # 步骤1：从源获取分片
+                    # fetch_start_time = time.time() # 如果ABR依赖代理->客户端时间则不严格需要
                     response_ts = requests.get(original_ts_url_on_server, timeout=SOCKET_TIMEOUT_SECONDS, stream=False)
                     response_ts.raise_for_status()
                     encrypted_data = response_ts.content
-                    # fetch_end_time = time.time()
+                    # fetch_end_time = time.time() # 如果ABR依赖代理->客户端时间则不严格需要
 
                     if not encrypted_data:
                         self.send_error(502, "Bad Gateway: Empty TS content from origin")
@@ -349,63 +349,63 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                     decrypted_data = AES.aes_decrypt_cbc(encrypted_data, AES.AES_KEY)
                     data_size_bytes = len(decrypted_data)
 
-                    # Send HTTP Headers before starting data transmission (throttled or not)
+                    # 在开始数据传输之前发送HTTP头（无论是否限流）
                     self.send_response(200)
                     self.send_header('Content-type', 'video/MP2T')
                     self.send_header('Content-Length', str(data_size_bytes))
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
 
-                    # Step 2: Simulate bandwidth for sending to hls.js using network_simulator
+                    # 步骤2：使用network_simulator模拟发送到hls.js的带宽
                     current_sim_bps = network_simulator.get_current_simulated_bandwidth()
 
                     if current_sim_bps is not None and current_sim_bps > 0:
-                        # Throttled transfer
+                        # 限流传输
                         effective_segment_download_duration_for_abr = network_simulator.throttle_data_transfer(
                             decrypted_data,
                             current_sim_bps,
-                            self.wfile, # Pass the output stream (socket)
+                            self.wfile, # 传递输出流（套接字）
                             segment_filename_for_log
                         )
                     else:
-                        # No simulation, send as fast as possible
+                        # 无模拟，尽可能快地发送
                         log_adapter.info(f"{request_log_tag} - Sending segment {segment_filename_for_log} ({data_size_bytes / 1024:.1f} KB) at full speed.")
                         _t_actual_send_start = time.time()
                         self.wfile.write(decrypted_data)
                         self.wfile.flush()
                         _t_actual_send_end = time.time()
                         effective_segment_download_duration_for_abr = _t_actual_send_end - _t_actual_send_start
-                        if effective_segment_download_duration_for_abr < 0.001: # Avoid zero or too small values
+                        if effective_segment_download_duration_for_abr < 0.001: # 避免零或太小的值
                             effective_segment_download_duration_for_abr = 0.001
                 
-                except socket.error as e_sock: # Catch socket errors during self.wfile.write (throttled or not)
+                except socket.error as e_sock: # 在self.wfile.write期间捕获套接字错误（无论是否限流）
                     logger.warning(f"{request_log_tag} Socket error sending segment {segment_filename_for_log} to hls.js: {e_sock}")
                     if ABRManager.instance: ABRManager.instance.report_download_error(original_ts_url_on_server)
-                    # Don't try to send further error responses if socket is broken
+                    # 如果套接字损坏，不要尝试发送进一步的错误响应
                     return 
-                except requests.exceptions.RequestException as e_req: # Errors fetching from origin
+                except requests.exceptions.RequestException as e_req: # 从源获取时出错
                     if ABRManager.instance: ABRManager.instance.report_download_error(original_ts_url_on_server)
                     self.send_error(502, f"Bad Gateway: Could not fetch TS: {e_req}")
                     return
-                except Exception as e_proc: # Other errors like decryption, etc.
+                except Exception as e_proc: # 其他错误如解密等
                     logger.error(f"{request_log_tag} Error processing segment {segment_filename_for_log}: {e_proc}", exc_info=True)
                     if ABRManager.instance: ABRManager.instance.report_download_error(original_ts_url_on_server)
-                    # Try to send an error if headers haven't been sent or socket is okay
+                    # 如果头部尚未发送或套接字正常，尝试发送错误
                     try:
-                        if not self.headers_sent: # A bit heuristic, might need better check
+                        if not self.headers_sent: # 有点启发式，可能需要更好的检查
                            self.send_error(500, f"Internal Server Error: Segment processing failed: {e_proc}")
                     except Exception as e_send_err:
                         logger.error(f"{request_log_tag} Further error sending 500: {e_send_err}")
                     return
                 
-                # Step 3: Report to ABRManager (only if no fatal error above that prevented sending data)
+                # 步骤3：报告给ABRManager（仅在上述没有阻止发送数据的致命错误时）
                 if ABRManager.instance and effective_segment_download_duration_for_abr > 0 and data_size_bytes > 0:
                     ABRManager.instance.add_segment_download_stat(
                         original_ts_url_on_server,
                         data_size_bytes,
                         effective_segment_download_duration_for_abr
                     )
-                return # End of /decrypt_segment
+                return # /decrypt_segment结束
             
             self.send_error(404, "Not Found")
         except requests.exceptions.RequestException as e: 
@@ -415,7 +415,7 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
             logger.error(f"{request_log_tag} Proxy error: {e}", exc_info=True); 
             self.send_error(500, "Internal Server Error")
             
-    def _rewrite_master_playlist(self, master_content, original_master_url): # Same
+    def _rewrite_master_playlist(self, master_content, original_master_url):
         lines = master_content.splitlines(); modified_lines = []
         for i in range(len(lines)):
             line = lines[i].strip()
@@ -432,7 +432,7 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                 modified_lines.append(line)
         return "\n".join(modified_lines)
     
-    def _rewrite_media_playlist(self, media_content, original_media_url): # Same
+    def _rewrite_media_playlist(self, media_content, original_media_url):
         lines = media_content.splitlines(); modified_lines = []
         base_url = urljoin(original_media_url, '.')
         for line in lines:
@@ -444,11 +444,11 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
         return "\n".join(modified_lines)
     def log_message(self, format, *args): logger.debug(f"ProxyHTTP: {self.address_string()} - {args[0]} {args[1]}")
 
-class ThreadingLocalProxyServer(socketserver.ThreadingMixIn, http.server.HTTPServer): # Same
+class ThreadingLocalProxyServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-def _run_proxy_server_target(): # Same
+def _run_proxy_server_target():
     global g_local_proxy_server_instance
     try:
         g_local_proxy_server_instance = ThreadingLocalProxyServer(
@@ -459,10 +459,10 @@ def _run_proxy_server_target(): # Same
     finally: logger.info("PROXY_THREAD: Proxy server loop finished.")
     
 
-def start_proxy_server(): # Same, ensure it returns True/False
-    # ... (same as your last working version) ...
+def start_proxy_server():
     global g_proxy_runner_thread, g_local_proxy_server_instance
-    if g_proxy_runner_thread and g_proxy_runner_thread.is_alive(): return bool(g_local_proxy_server_instance) 
+    if g_proxy_runner_thread and g_proxy_runner_thread.is_alive(): 
+        return bool(g_local_proxy_server_instance) 
     g_local_proxy_server_instance = None 
     g_proxy_runner_thread = threading.Thread(target=_run_proxy_server_target, daemon=True, name="ProxyServerThread")
     g_proxy_runner_thread.start()
@@ -470,8 +470,7 @@ def start_proxy_server(): # Same, ensure it returns True/False
     return bool(g_proxy_runner_thread.is_alive() and g_local_proxy_server_instance)
 
 
-def stop_proxy_server(): # Same
-    # ... (same as your last working version) ...
+def stop_proxy_server():
     global g_local_proxy_server_instance, g_proxy_runner_thread
     if g_local_proxy_server_instance:
         logger.info("PROXY_MAIN: Stopping proxy server instance...")
@@ -484,12 +483,11 @@ def stop_proxy_server(): # Same
 
 
 def main():
-    def main():
-        global g_websocket_server_thread, g_asyncio_loop_for_websocket, qoe_manager
+    global g_websocket_server_thread, g_asyncio_loop_for_websocket, qoe_manager
     abr_manager_instance = None
-    scenario_player = None # Define scenario_player here for access in finally
+    scenario_player = None # 在这里定义scenario_player以便在finally中访问
 
-    # ... (AES key checks, DOWNLOAD_DIR creation - same) ...
+    # AES密钥检查，DOWNLOAD_DIR创建
     if not hasattr(AES, 'AES_KEY') or not AES.AES_KEY: logger.error("AES_KEY missing!"); return
     if not callable(getattr(AES, 'aes_decrypt_cbc', None)): logger.error("aes_decrypt_cbc missing!"); return
     if not os.path.exists(DOWNLOAD_DIR): os.makedirs(DOWNLOAD_DIR)
@@ -510,7 +508,7 @@ def main():
     master_m3u8_url = f"http://{SERVER_HOST}:{SERVER_PORT}/{VIDEO_TO_STREAM_NAME}/master.m3u8"
     available_streams = fetch_master_m3u8_for_abr_init(master_m3u8_url)
     if available_streams:
-        # --- 选择你想要的决策逻辑 ---
+        # --- 选择想要的决策逻辑 ---
         # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
         selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
         # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
@@ -525,14 +523,14 @@ def main():
     else:
         logger.error("Could not fetch streams for ABR init. ABR will not function.")
 
-    # --- Initialize and start the network scenario player ---
+    # --- 初始化并启动网络场景播放器 ---
     logger.info("MAIN: Initializing and starting network scenario player...")
     network_simulator.set_bandwidth_update_callback(schedule_network_sim_status_broadcast)
     scenario_player = network_simulator.create_default_simulation_scenario()
-    # Or, define a custom scenario:
+    # 或者，定义自定义场景：
     # scenario_player = network_simulator.NetworkScenarioPlayer()
-    # scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10s full speed
-    # scenario_player.add_step(duration_seconds=20, bandwidth_bps=1_000_000) # 20s at 1 Mbps
+    # scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10秒全速
+    # scenario_player.add_step(duration_seconds=20, bandwidth_bps=1_000_000) # 20秒1Mbps
     # ...
     scenario_player.start()
 
@@ -545,7 +543,7 @@ def main():
     try:
         while True: 
             time.sleep(60)
-            # qoe_manager.print_summary() # Optional periodic summary
+            # qoe_manager.print_summary() # 可选的定期摘要
     except KeyboardInterrupt:
         logger.info("Ctrl+C pressed. Shutting down...")
     finally:
@@ -554,13 +552,13 @@ def main():
         abr_streams_info = None
         if abr_manager_instance and hasattr(abr_manager_instance, 'available_streams'):
             abr_streams_info = abr_manager_instance.available_streams
-        qoe_manager.log_playback_session_end(available_abr_streams=abr_streams_info) # Log QoE session end
+        qoe_manager.log_playback_session_end(available_abr_streams=abr_streams_info) # 记录QoE会话结束
         
         if abr_manager_instance:
             logger.info("Stopping ABR Manager...")
             abr_manager_instance.stop()
 
-        if scenario_player: # Stop the scenario player
+        if scenario_player: # 停止场景播放器
             logger.info("Stopping Network Scenario Player...")
             scenario_player.stop()
 
@@ -577,7 +575,7 @@ def main():
             if g_websocket_server_thread.is_alive(): 
                 logger.warning("WebSocket server thread did not join cleanly.")
 
-        stop_proxy_server() # Stop the HTTP proxy server
+        stop_proxy_server() # 停止HTTP代理服务器
         logger.info("Client application finished.")
 
 if __name__ == "__main__":
