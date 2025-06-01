@@ -17,7 +17,7 @@ class QoEMetricsManager:
         self.current_level_index = -1
         self.time_at_each_level = {} # {level_index: duration_ms}
         self.last_event_timestamp_ms = 0 # 用于计算切换/结束前在当前级别的持续时间
-        logger.info("QoEMetricsManager 已初始化。")
+        logger.info("QoEMetricsManager initialized.")
 
     def start_session_if_needed(self, event_timestamp_ms):
         if not self.session_active:

@@ -84,7 +84,7 @@ class ABRManager:
 
         # --- 存储选择的决策逻辑类型 ---
         self.logic_type = logic_type
-        logger.info(f"ABRManager初始化，使用逻辑类型: {self.logic_type}")
+        logger.info(f"ABRManager initialized with logic type: {self.logic_type}")
 
         if self.available_streams: #
             self._update_current_abr_selected_url_logging()

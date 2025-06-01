@@ -155,7 +155,7 @@ class NetworkScenarioPlayer:
 
         if not self._stop_event.is_set(): # 如果场景自然完成
              logger.info("SIM_CTRL: All scenario steps completed.")
-        logger.info("SIM_CTRL: 网络模拟场景播放器线程已结束。")
+        logger.info("SIM_CTRL: Network simulation scenario player thread finished.")
 
     def start(self):
         """在新线程中开始播放场景。"""
