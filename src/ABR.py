@@ -4,6 +4,14 @@ import logging
 import re
 import requests
 from urllib.parse import urljoin
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+from collections import deque
+import random
+import os
+import json
 
 logger = logging.getLogger(__name__) # 使用模块特定的日志记录器
 
@@ -49,6 +57,40 @@ def fetch_master_m3u8_for_abr_init(master_m3u8_url_on_server):
                 })
     return available_streams if available_streams else None
 
+class DQNNetwork(nn.Module):
+    """DQN神经网络"""
+    def __init__(self, state_size, action_size, hidden_size=128):
+        super(DQNNetwork, self).__init__()
+        self.fc1 = nn.Linear(state_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, hidden_size)
+        self.fc4 = nn.Linear(hidden_size, action_size)
+        self.dropout = nn.Dropout(0.1)
+        
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = torch.relu(self.fc2(x))
+        x = self.dropout(x)
+        x = torch.relu(self.fc3(x))
+        return self.fc4(x)
+
+class ReplayBuffer:
+    """经验回放缓冲区"""
+    def __init__(self, capacity=10000):
+        self.buffer = deque(maxlen=capacity)
+    
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+    
+    def sample(self, batch_size):
+        batch = random.sample(self.buffer, batch_size)
+        state, action, reward, next_state, done = map(np.stack, zip(*batch))
+        return state, action, reward, next_state, done
+    
+    def __len__(self):
+        return len(self.buffer)
+
 class ABRManager:
     instance = None
 
@@ -56,6 +98,7 @@ class ABRManager:
     LOGIC_TYPE_BANDWIDTH_ONLY = "bandwidth_only"
     LOGIC_TYPE_BANDWIDTH_BUFFER = "bandwidth_buffer"
     LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE = "enhanced_buffer_response" # 积极响应缓冲区的逻辑
+    LOGIC_TYPE_DQN = "dqn_rl" # DQN强化学习逻辑
 
     def __init__(self, available_streams_from_master, broadcast_abr_decision_callback,
                  broadcast_bw_estimate_callback=None,
@@ -86,10 +129,227 @@ class ABRManager:
         self.logic_type = logic_type
         logger.info(f"ABRManager initialized with logic type: {self.logic_type}")
 
+        # --- DQN相关初始化 ---
+        if self.logic_type == self.LOGIC_TYPE_DQN:
+            self._init_dqn()
+
         if self.available_streams: #
             self._update_current_abr_selected_url_logging()
         self.broadcast_abr_decision(self.current_stream_index_by_abr)
 
+    def _init_dqn(self):
+        """初始化DQN相关组件"""
+        # 状态空间维度: [当前带宽(Mbps), 缓冲区长度(s), 当前比特率等级(归一化), 最近下载时间(s), 下载成功率]
+        self.state_size = 5
+        # 动作空间: 选择比特率等级
+        self.action_size = len(self.available_streams)
+        
+        # 神经网络
+        self.dqn = DQNNetwork(self.state_size, self.action_size)
+        self.target_dqn = DQNNetwork(self.state_size, self.action_size)
+        self.optimizer = optim.Adam(self.dqn.parameters(), lr=0.001)
+        
+        # 经验回放
+        self.replay_buffer = ReplayBuffer(capacity=10000)
+        
+        # DQN超参数
+        self.epsilon = 0.9  # 探索率
+        self.epsilon_decay = 0.995
+        self.epsilon_min = 0.1
+        self.gamma = 0.95  # 折扣因子
+        self.batch_size = 32
+        self.target_update_freq = 100  # 目标网络更新频率
+        
+        # 训练相关
+        self.training_step = 0
+        self.last_state = None
+        self.last_action = None
+        self.last_qoe_score = 0
+        
+        # 模型保存路径
+        self.model_save_path = "dqn_abr_model.pth"
+        self.load_model_if_exists()
+        
+        logger.info(f"DQN ABR initialized: state_size={self.state_size}, action_size={self.action_size}")
+
+    def load_model_if_exists(self):
+        """加载已保存的模型"""
+        if os.path.exists(self.model_save_path):
+            try:
+                checkpoint = torch.load(self.model_save_path)
+                self.dqn.load_state_dict(checkpoint['dqn_state_dict'])
+                self.target_dqn.load_state_dict(checkpoint['target_dqn_state_dict'])
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                self.epsilon = checkpoint.get('epsilon', self.epsilon)
+                self.training_step = checkpoint.get('training_step', 0)
+                logger.info(f"DQN model loaded from {self.model_save_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load DQN model: {e}")
+
+    def save_model(self):
+        """保存模型"""
+        if self.logic_type == self.LOGIC_TYPE_DQN:
+            try:
+                torch.save({
+                    'dqn_state_dict': self.dqn.state_dict(),
+                    'target_dqn_state_dict': self.target_dqn.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'epsilon': self.epsilon,
+                    'training_step': self.training_step
+                }, self.model_save_path)
+                logger.info(f"DQN model saved to {self.model_save_path}")
+            except Exception as e:
+                logger.error(f"Failed to save DQN model: {e}")
+
+    def get_current_state(self):
+        """获取当前状态向量"""
+        # 当前带宽 (Mbps)
+        bandwidth_mbps = max(0, self.estimated_bandwidth_bps / 1_000_000)
+        
+        # 缓冲区长度 (秒)
+        buffer_level = max(0, self.current_player_buffer_s)
+        
+        # 当前比特率等级 (归一化到0-1)
+        current_bitrate_level = self.current_stream_index_by_abr / max(1, len(self.available_streams) - 1)
+        
+        # 最近下载时间 (秒)
+        recent_download_time = 0
+        if self.segment_download_stats:
+            successful_downloads = [s for s in self.segment_download_stats if not s.get('error') and 'duration' in s]
+            if successful_downloads:
+                recent_download_time = successful_downloads[-1]['duration']
+        
+        # 下载成功率 (最近5个片段)
+        success_rate = 1.0
+        if self.segment_download_stats:
+            recent_stats = self.segment_download_stats[-5:]
+            if recent_stats:
+                successful_count = len([s for s in recent_stats if not s.get('error')])
+                success_rate = successful_count / len(recent_stats)
+        
+        state = np.array([
+            bandwidth_mbps,
+            buffer_level,
+            current_bitrate_level,
+            recent_download_time,
+            success_rate
+        ], dtype=np.float32)
+        
+        return state
+
+    def calculate_qoe_reward(self, old_state, action, new_state):
+        """计算QoE奖励函数"""
+        # 获取选择的比特率
+        selected_bitrate_mbps = self.available_streams[action]['bandwidth'] / 1_000_000
+        
+        # 1. 质量奖励 (比特率越高越好)
+        max_bitrate_mbps = max(s['bandwidth'] for s in self.available_streams) / 1_000_000
+        quality_reward = (selected_bitrate_mbps / max_bitrate_mbps) * 10
+        
+        # 2. 缓冲区健康度奖励
+        buffer_target = 15.0  # 目标缓冲区长度
+        buffer_level = new_state[1]
+        
+        if buffer_level < 2.0:
+            # 严重卡顿惩罚
+            buffer_reward = -50.0
+        elif buffer_level < 5.0:
+            # 低缓冲区惩罚
+            buffer_reward = -10.0
+        elif 10.0 <= buffer_level <= 20.0:
+            # 理想缓冲区奖励
+            buffer_reward = 5.0
+        elif buffer_level > 30.0:
+            # 过高缓冲区轻微惩罚
+            buffer_reward = -2.0
+        else:
+            buffer_reward = 0
+        
+        # 3. 切换惩罚 (避免频繁切换)
+        switch_penalty = 0
+        if action != self.current_stream_index_by_abr:
+            # 计算切换幅度
+            switch_magnitude = abs(action - self.current_stream_index_by_abr)
+            switch_penalty = -switch_magnitude * 2.0
+        
+        # 4. 带宽效率奖励
+        bandwidth_efficiency = 0
+        if old_state[0] > 0:  # 如果有带宽估计
+            utilization = selected_bitrate_mbps / old_state[0]
+            if 0.7 <= utilization <= 0.9:
+                bandwidth_efficiency = 3.0  # 良好的带宽利用率
+            elif utilization > 1.0:
+                bandwidth_efficiency = -5.0  # 超出带宽能力
+        
+        # 5. 下载成功率奖励
+        success_rate_reward = new_state[4] * 2.0  # 成功率越高越好
+        
+        total_reward = (quality_reward + buffer_reward + switch_penalty + 
+                       bandwidth_efficiency + success_rate_reward)
+        
+        logger.debug(f"DQN Reward: Quality={quality_reward:.2f}, Buffer={buffer_reward:.2f}, "
+                    f"Switch={switch_penalty:.2f}, BWEff={bandwidth_efficiency:.2f}, "
+                    f"Success={success_rate_reward:.2f}, Total={total_reward:.2f}")
+        
+        return total_reward
+
+    def select_action_dqn(self, state):
+        """使用ε-贪婪策略选择动作"""
+        if random.random() < self.epsilon:
+            # 随机探索
+            action = random.randint(0, self.action_size - 1)
+            logger.debug(f"DQN: Random action selected: {action}")
+        else:
+            # 利用当前策略
+            with torch.no_grad():
+                state_tensor = torch.FloatTensor(state).unsqueeze(0)
+                q_values = self.dqn(state_tensor)
+                action = q_values.argmax().item()
+            logger.debug(f"DQN: Policy action selected: {action}")
+        
+        return action
+
+    def train_dqn(self):
+        """训练DQN网络"""
+        if len(self.replay_buffer) < self.batch_size:
+            return
+        
+        # 采样经验
+        states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.batch_size)
+        
+        states = torch.FloatTensor(states)
+        actions = torch.LongTensor(actions)
+        rewards = torch.FloatTensor(rewards)
+        next_states = torch.FloatTensor(next_states)
+        dones = torch.BoolTensor(dones)
+        
+        # 计算当前Q值
+        current_q_values = self.dqn(states).gather(1, actions.unsqueeze(1))
+        
+        # 计算目标Q值
+        with torch.no_grad():
+            next_q_values = self.target_dqn(next_states).max(1)[0]
+            target_q_values = rewards + (self.gamma * next_q_values * ~dones)
+        
+        # 计算损失
+        loss = nn.MSELoss()(current_q_values.squeeze(), target_q_values)
+        
+        # 反向传播
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.dqn.parameters(), 1.0)  # 梯度裁剪
+        self.optimizer.step()
+        
+        # 更新目标网络
+        self.training_step += 1
+        if self.training_step % self.target_update_freq == 0:
+            self.target_dqn.load_state_dict(self.dqn.state_dict())
+            logger.info(f"DQN: Target network updated at step {self.training_step}")
+        
+        # 衰减探索率
+        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+        
+        logger.debug(f"DQN Training: Loss={loss.item():.4f}, Epsilon={self.epsilon:.3f}")
 
     def _update_current_abr_selected_url_logging(self):
         with self._internal_lock:
@@ -196,9 +456,65 @@ class ABRManager:
             self._logic_bandwidth_buffer()
         elif self.logic_type == self.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE:
             self._logic_enhanced_buffer_response()
+        elif self.logic_type == self.LOGIC_TYPE_DQN:
+            self._logic_dqn()
         else:
             logger.warning(f"Unknown ABR logic type: {self.logic_type}. Defaulting to bandwidth_buffer.")
             self._logic_bandwidth_buffer()
+
+    def _logic_dqn(self):
+        """基于DQN的ABR决策逻辑"""
+        if not self.available_streams or len(self.available_streams) <= 1:
+            return
+
+        # 更新带宽估计
+        self._estimate_bandwidth_simple_average()
+        
+        # 获取当前状态
+        current_state = self.get_current_state()
+        
+        # 如果有上一步的经验，添加到经验回放缓冲区
+        if self.last_state is not None and self.last_action is not None:
+            reward = self.calculate_qoe_reward(self.last_state, self.last_action, current_state)
+            done = False  # 流媒体场景通常不会结束
+            
+            self.replay_buffer.push(
+                self.last_state, self.last_action, reward, current_state, done
+            )
+            
+            # 训练网络
+            self.train_dqn()
+        
+        # 选择动作
+        action = self.select_action_dqn(current_state)
+        
+        # 执行动作（切换码率）
+        if action != self.current_stream_index_by_abr:
+            old_stream_info = self.available_streams[self.current_stream_index_by_abr]
+            self.current_stream_index_by_abr = action
+            new_stream_info = self.available_streams[self.current_stream_index_by_abr]
+            self._update_current_abr_selected_url_logging()
+            
+            logger.info(f"ABR DECISION (DQN): Switch from level {self.current_stream_index_by_abr} "
+                       f"(~{old_stream_info.get('bandwidth',0)/1000:.0f}Kbps) to {action} "
+                       f"(~{new_stream_info.get('bandwidth',0)/1000:.0f}Kbps). "
+                       f"Est.BW={self.estimated_bandwidth_bps/1000:.0f}Kbps, "
+                       f"Buf={self.current_player_buffer_s:.2f}s, "
+                       f"Epsilon={self.epsilon:.3f}")
+            
+            self.broadcast_abr_decision(self.current_stream_index_by_abr)
+        else:
+            logger.info(f"ABR DECISION (DQN): No change from level {action}. "
+                       f"Est.BW={self.estimated_bandwidth_bps/1000:.0f}Kbps, "
+                       f"Buf={self.current_player_buffer_s:.2f}s")
+        
+        # 保存当前状态和动作用于下次计算奖励
+        self.last_state = current_state.copy()
+        self.last_action = action
+        
+        # 定期保存模型
+        if self.training_step % 500 == 0 and self.training_step > 0:
+            self.save_model()
 
     # --- 决策逻辑: 只看带宽 ---
     def _logic_bandwidth_only(self):
@@ -438,4 +754,9 @@ class ABRManager:
         if self.abr_thread and self.abr_thread.is_alive():
             self.stop_abr_event.set()
             self.abr_thread.join(timeout=2.0) # 给线程时间干净地退出
+     
+        # 保存DQN模型
+        if self.logic_type == self.LOGIC_TYPE_DQN:
+            self.save_model()
+
         ABRManager.instance = None # 清理实例

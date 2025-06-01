@@ -510,8 +510,9 @@ def main():
     if available_streams:
         # --- 选择想要的决策逻辑 ---
         # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
-        selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+        # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
         # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
+        selected_logic = ABRManager.LOGIC_TYPES_DQN
 
         abr_manager_instance = ABRManager(
             available_streams,
