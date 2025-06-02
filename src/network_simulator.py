@@ -193,54 +193,60 @@ def create_default_simulation_scenario(mode = -1):
     
     if mode == 1:
         # 低带宽稳定模式
-        player.add_step(10, 900_000)
-        player.add_step(10, 1_100_000)
-        player.add_step(10, 900_000)
-        player.add_step(10, 1_100_000)
+        player.add_step(5, 900_000)
+        player.add_step(5, 1_100_000)
+        player.add_step(5, 900_000)
+        player.add_step(5, 1_100_000)
+        player.add_step(5, 900_000)
+        player.add_step(5, 1_100_000)
+        player.add_step(5, 900_000)
+        player.add_step(5, 1_100_000)
 
     elif mode == 2:
         # 高带宽稳定模式
-        player.add_step(10, 19_000_000)
-        player.add_step(10, 21_000_000)
-        player.add_step(10, 19_000_000)
-        player.add_step(10, 21_000_000)
+        player.add_step(5, 19_000_000)
+        player.add_step(5, 21_000_000)
+        player.add_step(5, 19_000_000)
+        player.add_step(5, 21_000_000)
+        player.add_step(5, 19_000_000)
+        player.add_step(5, 21_000_000)
+        player.add_step(5, 19_000_000)
+        player.add_step(5, 21_000_000)
 
     elif mode == 3:
         # 快速波动模式
         for _ in range(4):
-            player.add_step(5, 20_000_000)  # 2 Mbps 持续 10 秒
-            player.add_step(5, 800_000)    # 800 Kbps 持续 10 秒
+            player.add_step(5, 20_000_000)
+            player.add_step(5, 5_000_000) 
 
     elif mode == 4:
         # 突发低带宽模式
-        player.add_step(120, 5_000_000)  # 5 Mbps 持续 2 分钟
-        player.add_step(30, 200_000)     # 200 Kbps 突发低带宽 30 秒
-        player.add_step(150, 5_000_000)  # 5 Mbps 持续 2 分 30 秒
-        player.add_step(10, None)  # 最后 10 秒全速
+        player.add_step(15, 20_000_000)
+        player.add_step(25, 1_000_000)
 
     elif mode == 5:
         # 逐步提升带宽模式
-        bandwidths = [500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000]
+        bandwidths = [1_000_000, 2_000_000, 5_000_000, 10_000_000, 20_000_000]
         for bps in bandwidths:
-            player.add_step(60, bps)  # 每个带宽级别持续 1 分钟
-        player.add_step(10, None)  # 最后 10 秒全速
+            player.add_step(8, bps)
 
     elif mode == 6:
         # 逐步降低带宽模式
-        bandwidths = [10_000_000, 5_000_000, 2_000_000, 1_000_000, 500_000]
+        bandwidths = [20_000_000, 10_000_000, 5_000_000, 2_000_000, 1_000_000]
         for bps in bandwidths:
-            player.add_step(60, bps)  # 每个带宽级别持续 1 分钟
-        player.add_step(10, None)  # 最后 10 秒全速
+            player.add_step(8, bps) 
 
     elif mode == 7:
-        # 突然降低的台阶状模式
-        player.add_step(180, 5_000_000)
-        player.add_step(120, 800_000)
+        # 低高低
+        player.add_step(10, 2_000_000)
+        player.add_step(20, 20_000_000)
+        player.add_step(10, 2_000_000)
 
     elif mode == 8:
-        # 突然升高的台阶状模式
-        player.add_step(180, 800_000)
-        player.add_step(120, 5_000_000)
+        # 高低高
+        player.add_step(10, 20_000_000)
+        player.add_step(20, 2_000_000)
+        player.add_step(10, 20_000_000)
 
     else:
         # 默认模式
