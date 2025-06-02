@@ -9,6 +9,7 @@ import socketserver
 import socket
 import webbrowser
 import json # 用于WebSocket消息处理
+import signal
 
 # --- WebSocket和AsyncIO ---
 import asyncio
@@ -18,8 +19,10 @@ import AES # AES解密模块
 from ABR import ABRManager, fetch_master_m3u8_for_abr_init
 from QoE import QoEMetricsManager # QoE指标管理器
 import network_simulator # 网络模拟模块
+import argparse
 
 # --- 配置 ---
+REBUFFERING = False
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 8081
 LOCAL_PROXY_HOST = '127.0.0.1'
@@ -46,12 +49,21 @@ g_websocket_server_thread = None
 g_asyncio_loop_for_websocket = None
 g_websocket_stop_event = None # 将是一个asyncio.Event
 
+# 全局变量，用于指示程序是否应该退出
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handles termination signals like SIGINT and SIGTERM."""
+    global shutdown_requested
+    logger.info(f"Signal {signal.Signals(signum).name} received. Requesting shutdown...")
+    shutdown_requested = True
+
 # 全局实例
 qoe_manager = QoEMetricsManager()
 
 # --- WebSocket服务器函数（handle_websocket_client需要路由QoE消息） ---
 async def handle_websocket_client(websocket):
-    global g_connected_websocket_clients
+    global g_connected_websocket_clients, REBUFFERING
     client_identifier = getattr(websocket, 'path', None)
     if client_identifier is None:
         try: 
@@ -61,6 +73,21 @@ async def handle_websocket_client(websocket):
             
     logger.info(f"WebSocket client connected: {client_identifier}")
     g_connected_websocket_clients.add(websocket)
+    
+    try:
+        current_sim_bps = network_simulator.get_current_simulated_bandwidth() #
+        status_data_on_connect = {}
+        if current_sim_bps is None:
+            status_data_on_connect = {"status": "Full Speed"}
+        else:
+            status_data_on_connect = {"bandwidth_Mbps": current_sim_bps / 1_000_000}
+        
+        initial_status_message = json.dumps({"type": "NETWORK_SIM_UPDATE", "data": status_data_on_connect})
+        await websocket.send(initial_status_message)
+        logger.info(f"Sent initial network simulator status to {client_identifier}: {status_data_on_connect}")
+    except Exception as e_init_send:
+        logger.error(f"Failed to send initial network status to {client_identifier}: {e_init_send}")
+        
     try:
         async for message_str in websocket:
             logger.debug(f"WebSocket received from {client_identifier}: {message_str}")
@@ -68,15 +95,24 @@ async def handle_websocket_client(websocket):
                 message = json.loads(message_str)
                 if message.get("type") == "QOE_EVENT":
                     event_data = message.get("data", {})
+                    # print('--------------  ', event_data, ' -----------awawa')
                     event_name = event_data.get("event")
+                    if event_data.get("value") is not None and event_data.get("value") < 1.0 and not REBUFFERING:
+                        REBUFFERING = True
+                        event_name = "REBUFFERING_START"
+                    elif event_data.get("value") is not None and event_data.get("value") >= 1.0 and REBUFFERING:
+                        REBUFFERING = False
+                        event_name = "REBUFFERING_END"
                     timestamp = event_data.get("timestamp", time.time() * 1000)
 
                     if event_name == "STARTUP_LATENCY":
                         qoe_manager.record_startup_latency(event_data.get("value"), timestamp)
                     elif event_name == "REBUFFERING_START":
+                        REBUFFERING = True
                         qoe_manager.record_rebuffering_start(timestamp)
                     elif event_name == "REBUFFERING_END":
-                        qoe_manager.record_rebuffering_end(event_data.get("duration"), timestamp)
+                        REBUFFERING = False
+                        qoe_manager.record_rebuffering_end(timestamp)
                     elif event_name == "QUALITY_SWITCH":
                         qoe_manager.record_quality_switch(
                             event_data.get("fromLevel"),
@@ -240,6 +276,7 @@ def schedule_abr_bw_estimate_broadcast(estimated_mbps):
         logger.warning("Cannot schedule ABR BW Estimate broadcast: WebSocket asyncio loop not available.")
         
 def schedule_network_sim_status_broadcast(status_data):
+    logger.info(f"DEBUG: Broadcasting network sim status: {status_data}")
     if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
         message = json.dumps({"type": "NETWORK_SIM_UPDATE", "data": status_data})
         asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
@@ -375,8 +412,8 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                         self.wfile.flush()
                         _t_actual_send_end = time.time()
                         effective_segment_download_duration_for_abr = _t_actual_send_end - _t_actual_send_start
-                        if effective_segment_download_duration_for_abr < 0.001: # 避免零或太小的值
-                            effective_segment_download_duration_for_abr = 0.001
+                        if effective_segment_download_duration_for_abr < 1e-5: # 避免零或太小的值
+                            effective_segment_download_duration_for_abr = 1e-5
                 
                 except socket.error as e_sock: # 在self.wfile.write期间捕获套接字错误（无论是否限流）
                     logger.warning(f"{request_log_tag} Socket error sending segment {segment_filename_for_log} to hls.js: {e_sock}")
@@ -481,11 +518,34 @@ def stop_proxy_server():
         g_proxy_runner_thread = None
         logger.info("PROXY_MAIN: Proxy server stopped.")
 
-
 def main():
     global g_websocket_server_thread, g_asyncio_loop_for_websocket, qoe_manager
+    global shutdown_requested
+
+    # 创建解析器对象
+    parser = argparse.ArgumentParser(description='Client application with two integer arguments')
+    # 添加第一个整数参数
+    parser.add_argument('arg1', type=int, help='abr_decision')
+    # 添加第二个整数参数
+    parser.add_argument('arg2', type=int, help='network_condition')
+    # 添加第三个字符串参数
+    parser.add_argument('arg3', type=str, help='write_path')
+    # 解析命令行参数
+    args = parser.parse_args()
+
+    abr_decision = args.arg1
+    # [1, 3]
+    net_decision = args.arg2
+    # [1, 8]
+    write_path = args.arg3
+
+    qoe_manager.set_write_path(write_path)
     abr_manager_instance = None
     scenario_player = None # 在这里定义scenario_player以便在finally中访问
+    
+    # --- 注册信号处理器 ---
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler) # kill / terminate
 
     # AES密钥检查，DOWNLOAD_DIR创建
     if not hasattr(AES, 'AES_KEY') or not AES.AES_KEY: logger.error("AES_KEY missing!"); return
@@ -510,10 +570,27 @@ def main():
     if available_streams:
         # --- 选择想要的决策逻辑 ---
         # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
-        # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+        selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
         # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
-        selected_logic = ABRManager.LOGIC_TYPES_DQN
 
+        if abr_decision == 1:
+            selected_logic = ABRManager.LOGIC_TYPE_SLBW
+        elif abr_decision == 2:
+            selected_logic = ABRManager.LOGIC_TYPE_SWMA
+        elif abr_decision == 3:
+            selected_logic = ABRManager.LOGIC_TYPE_EWMA
+        elif abr_decision == 4:
+            selected_logic = ABRManager.LOGIC_TYPE_BUFFER_ONLY
+        elif abr_decision == 5:
+            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+        elif abr_decision == 6:
+            selected_logic = ABRManager.LOGIC_TYPE_COMPREHENSIVE
+        elif abr_decision == 7:
+            selected_logic = ABRManager.LOGIC_TYPES_DQN
+        else:
+            logger.error("Invalid ABR decision. Using default logic.")
+            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+            
         abr_manager_instance = ABRManager(
             available_streams,
             broadcast_abr_decision_callback=schedule_abr_broadcast,
@@ -527,12 +604,7 @@ def main():
     # --- 初始化并启动网络场景播放器 ---
     logger.info("MAIN: Initializing and starting network scenario player...")
     network_simulator.set_bandwidth_update_callback(schedule_network_sim_status_broadcast)
-    scenario_player = network_simulator.create_default_simulation_scenario()
-    # 或者，定义自定义场景：
-    # scenario_player = network_simulator.NetworkScenarioPlayer()
-    # scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10秒全速
-    # scenario_player.add_step(duration_seconds=20, bandwidth_bps=1_000_000) # 20秒1Mbps
-    # ...
+    scenario_player = network_simulator.create_default_simulation_scenario(mode = net_decision)
     scenario_player.start()
 
 
@@ -541,10 +613,21 @@ def main():
     webbrowser.open(player_url)
     logger.info("Client setup complete. Press Ctrl+C to stop.")
     
+    start_time = time.time()
+    RUNTIME_SECONDS = 30 # 设置期望的运行时间
+    
     try:
-        while True: 
-            time.sleep(60)
-            # qoe_manager.print_summary() # 可选的定期摘要
+        while not shutdown_requested:
+            current_runtime = time.time() - start_time
+            if current_runtime >= RUNTIME_SECONDS:
+                logger.info(f"Runtime limit ({RUNTIME_SECONDS} seconds) reached. Initiating shutdown...") # 日志修改为英文
+                shutdown_requested = True # 触发关闭
+                break # 退出循环以执行finally块
+
+            time.sleep(0.5)
+        
+        if shutdown_requested and not (current_runtime >= RUNTIME_SECONDS) : # 如果是因信号中断而非时间到达
+             logger.info("Shutdown requested by external signal...")
     except KeyboardInterrupt:
         logger.info("Ctrl+C pressed. Shutting down...")
     finally:
@@ -553,7 +636,9 @@ def main():
         abr_streams_info = None
         if abr_manager_instance and hasattr(abr_manager_instance, 'available_streams'):
             abr_streams_info = abr_manager_instance.available_streams
-        qoe_manager.log_playback_session_end(available_abr_streams=abr_streams_info) # 记录QoE会话结束
+            
+        if qoe_manager: # 检查qoe_manager是否已初始化
+            qoe_manager.log_playback_session_end(available_abr_streams=abr_streams_info)
         
         if abr_manager_instance:
             logger.info("Stopping ABR Manager...")

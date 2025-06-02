@@ -185,3 +185,13 @@ transmission_log*.txt
 
 # download segments
 download*/
+
+# test results
+test/
+Test/
+
+# Temp files
+tmp.py
+temp.py
+src/tmp.py
+src/temp.py

@@ -184,20 +184,74 @@ class NetworkScenarioPlayer:
                 logger.info("SIM_CTRL: Scenario player thread stopped.")
         self._thread = None # 清除线程引用
 
-# --- 示例默认场景 ---
-def create_default_simulation_scenario():
-    """创建默认网络模拟场景。"""
+# --- Example default scenario ---
+def create_default_simulation_scenario(mode = -1):
+    """Creates a default network simulation scenario."""
     player = NetworkScenarioPlayer()
-    player.add_step(20, None)  # 从20秒全速开始（允许初始缓冲）
-    player.add_step(40, 5_000_000)   # 然后，40秒5 Mbps
-    player.add_step(60, 800_000)    # 然后，60秒0.8 Mbps
-    player.add_step(60, 10_000_000)  # 然后，60秒10 Mbps
-    # 总共20秒更快速波动的示例
-    player.add_step(5, 500_000)    # 5秒0.5 Mbps
-    player.add_step(5, 2_000_000)   # 5秒2 Mbps
-    player.add_step(5, 500_000)    # 5秒0.5 Mbps
-    player.add_step(5, 2_000_000)   # 5秒2 Mbps
-    player.add_step(30, None)       # 最后，再30秒全速
+    # 初始 50 毫秒全速
+    player.add_step(0.05, None)
+    
+    if mode == 1:
+        # 低带宽稳定模式
+        player.add_step(300, 500_000)  # 500 Kbps 持续 5 分钟
+        player.add_step(10, None)  # 最后 10 秒全速
+
+    elif mode == 2:
+        # 高带宽稳定模式
+        player.add_step(300, 10_000_000)  # 10 Mbps 持续 5 分钟
+        player.add_step(10, None)  # 最后 10 秒全速
+
+    elif mode == 3:
+        # 快速波动模式
+        for _ in range(15):
+            player.add_step(10, 2_000_000)  # 2 Mbps 持续 10 秒
+            player.add_step(10, 800_000)    # 800 Kbps 持续 10 秒
+        player.add_step(10, None)  # 最后 10 秒全速
+
+    elif mode == 4:
+        # 突发低带宽模式
+        player.add_step(120, 5_000_000)  # 5 Mbps 持续 2 分钟
+        player.add_step(30, 200_000)     # 200 Kbps 突发低带宽 30 秒
+        player.add_step(150, 5_000_000)  # 5 Mbps 持续 2 分 30 秒
+        player.add_step(10, None)  # 最后 10 秒全速
+
+    elif mode == 5:
+        # 逐步提升带宽模式
+        bandwidths = [500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000]
+        for bps in bandwidths:
+            player.add_step(60, bps)  # 每个带宽级别持续 1 分钟
+        player.add_step(10, None)  # 最后 10 秒全速
+
+    elif mode == 6:
+        # 逐步降低带宽模式
+        bandwidths = [10_000_000, 5_000_000, 2_000_000, 1_000_000, 500_000]
+        for bps in bandwidths:
+            player.add_step(60, bps)  # 每个带宽级别持续 1 分钟
+        player.add_step(10, None)  # 最后 10 秒全速
+
+    elif mode == 7:
+        # 突然降低的台阶状模式
+        player.add_step(180, 5_000_000)
+        player.add_step(120, 800_000)
+
+    elif mode == 8:
+        # 突然升高的台阶状模式
+        player.add_step(180, 800_000)
+        player.add_step(120, 5_000_000)
+
+    else:
+        # 默认模式
+        player.add_step(20, None)  # 从20秒全速开始（允许初始缓冲）
+        player.add_step(40, 5_000_000)   # 然后，40秒5 Mbps
+        player.add_step(60, 800_000)    # 然后，60秒0.8 Mbps
+        player.add_step(60, 10_000_000)  # 然后，60秒10 Mbps
+        # 总共20秒更快速波动的示例
+        player.add_step(5, 500_000)    # 5秒0.5 Mbps
+        player.add_step(5, 2_000_000)   # 5秒2 Mbps
+        player.add_step(5, 500_000)    # 5秒0.5 Mbps
+        player.add_step(5, 2_000_000)   # 5秒2 Mbps
+        player.add_step(30, None)       # 最后，再30秒全速
+        
     return player
 
 if __name__ == '__main__':

@@ -2,7 +2,8 @@ import os
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.backends import default_backend
-
+# import cv2  # 添加 OpenCV 库
+import numpy as np
 
 def read_aes_key(file_path: str) -> bytes:
     """从文件中读取AES密钥，假设文件内容为16或32字节的二进制数据"""
@@ -49,17 +50,50 @@ def aes_decrypt_cbc(iv_ciphertext: bytes, key: bytes) -> bytes:
     plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()  # 去除填充，得到原始明文
     return plaintext  # 返回明文
 
-if __name__ == "__main__":
-    # 明文数据
-    segment_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "video_segments", "bbb_sunflower", "480p-1500k", "bbb_sunflower-480p-1500k-000.ts")
-    with open(segment_path, "rb") as f:
-        data = f.read()
-    # 加密
-    encrypted = aes_encrypt_cbc(data, AES_KEY)
-    print(f"Encrypted (IV+data): {encrypted.hex()}")
-    # 解密
-    decrypted = aes_decrypt_cbc(encrypted, AES_KEY)
-    # 将解密后的视频分片以.ts文件格式写入当前文件夹
-    with open("decrypted_segment.ts", "wb") as f:
-        f.write(decrypted)
-    print(f"Decrypted: {decrypted}")
+def calculate_psnr(original_frame, decoded_frame):
+    """
+    计算两帧之间的 PSNR 值。
+    Args:
+        original_frame (numpy.ndarray): 原始帧。
+        decoded_frame (numpy.ndarray): 解码后的帧。
+    Returns:
+        float: PSNR 值（以分贝为单位）。
+    """
+    mse = np.mean((original_frame - decoded_frame) ** 2)
+    if mse == 0:
+        return float('inf')  # 如果 MSE 为 0，PSNR 为无穷大
+    max_pixel = 255.0
+    psnr = 20 * np.log10(max_pixel / np.sqrt(mse))
+    return psnr
+
+# 示例用法
+# if __name__ == "__main__":
+#     # 明文数据
+#     segment_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "video_segments", "bbb_sunflower", "480p-1500k", "bbb_sunflower-480p-1500k-000.ts")
+#     with open(segment_path, "rb") as f:
+#         data = f.read()
+#     # 加密
+#     encrypted = aes_encrypt_cbc(data, AES_KEY)
+#     print(f"Encrypted (IV+data): {encrypted.hex()}")
+#     # 解密
+#     decrypted = aes_decrypt_cbc(encrypted, AES_KEY)
+#     # 将解密后的视频分片以.ts文件格式写入当前文件夹
+#     with open("decrypted_segment.ts", "wb") as f:
+#         f.write(decrypted)
+#     print(f"Decrypted: {decrypted}")
+
+#     # 解密后计算 PSNR
+#     original_video_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "original_video.mp4")
+#     cap_original = cv2.VideoCapture(original_video_path)
+#     cap_decrypted = cv2.VideoCapture("decrypted_segment.ts")
+
+#     while cap_original.isOpened() and cap_decrypted.isOpened():
+#         ret_orig, frame_orig = cap_original.read()
+#         ret_dec, frame_dec = cap_decrypted.read()
+#         if not ret_orig or not ret_dec:
+#             break
+#         psnr_value = calculate_psnr(frame_orig, frame_dec)
+#         print(f"PSNR: {psnr_value:.2f} dB")
+
+#     cap_original.release()
+#     cap_decrypted.release()
