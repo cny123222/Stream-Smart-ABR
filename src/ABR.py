@@ -127,7 +127,7 @@ class ABRManager:
 
     def add_segment_download_stat(self, url, size_bytes, duration_seconds):
         # 当接收到新的分片下载完成的统计信息时调用此方法
-        if duration_seconds > 0.001: # 只有当下载时长有效时才记录
+        if duration_seconds > 1e-5: # 只有当下载时长有效时才记录
             throughput_bps = (size_bytes * 8) / duration_seconds
             timestamp = time.time()
             
