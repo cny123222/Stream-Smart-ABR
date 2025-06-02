@@ -73,6 +73,21 @@ async def handle_websocket_client(websocket):
             
     logger.info(f"WebSocket client connected: {client_identifier}")
     g_connected_websocket_clients.add(websocket)
+    
+    try:
+        current_sim_bps = network_simulator.get_current_simulated_bandwidth() #
+        status_data_on_connect = {}
+        if current_sim_bps is None:
+            status_data_on_connect = {"status": "Full Speed"}
+        else:
+            status_data_on_connect = {"bandwidth_Mbps": current_sim_bps / 1_000_000}
+        
+        initial_status_message = json.dumps({"type": "NETWORK_SIM_UPDATE", "data": status_data_on_connect})
+        await websocket.send(initial_status_message)
+        logger.info(f"Sent initial network simulator status to {client_identifier}: {status_data_on_connect}")
+    except Exception as e_init_send:
+        logger.error(f"Failed to send initial network status to {client_identifier}: {e_init_send}")
+        
     try:
         async for message_str in websocket:
             logger.debug(f"WebSocket received from {client_identifier}: {message_str}")
@@ -91,7 +106,6 @@ async def handle_websocket_client(websocket):
                     timestamp = event_data.get("timestamp", time.time() * 1000)
 
                     if event_name == "STARTUP_LATENCY":
-                        print(f"---------11111 {event_data} 11111----------")
                         qoe_manager.record_startup_latency(event_data.get("value"), timestamp)
                     elif event_name == "REBUFFERING_START":
                         REBUFFERING = True
@@ -262,6 +276,7 @@ def schedule_abr_bw_estimate_broadcast(estimated_mbps):
         logger.warning("Cannot schedule ABR BW Estimate broadcast: WebSocket asyncio loop not available.")
         
 def schedule_network_sim_status_broadcast(status_data):
+    logger.info(f"DEBUG: Broadcasting network sim status: {status_data}")
     if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
         message = json.dumps({"type": "NETWORK_SIM_UPDATE", "data": status_data})
         asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
@@ -581,11 +596,6 @@ def main():
     logger.info("MAIN: Initializing and starting network scenario player...")
     network_simulator.set_bandwidth_update_callback(schedule_network_sim_status_broadcast)
     scenario_player = network_simulator.create_default_simulation_scenario(mode = net_decision)
-    scenario_player = network_simulator.create_default_simulation_scenario()
-    # scenario_player = network_simulator.NetworkScenarioPlayer()
-    # scenario_player.add_step(duration_seconds=10, bandwidth_bps=None) # 10秒全速
-    # scenario_player.add_step(duration_seconds=20, bandwidth_bps=1_000_000) # 20秒1Mbps
-    # ...
     scenario_player.start()
 
 

@@ -190,7 +190,7 @@ def create_default_simulation_scenario(mode = -1):
     player = NetworkScenarioPlayer()
     # 初始 50 毫秒全速
     player.add_step(0.05, None)
-
+    
     if mode == 1:
         # 低带宽稳定模式
         player.add_step(300, 500_000)  # 500 Kbps 持续 5 分钟
