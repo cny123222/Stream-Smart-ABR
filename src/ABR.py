@@ -55,7 +55,7 @@ class ABRManager:
     # --- 定义决策逻辑的枚举或常量 ---
     LOGIC_TYPE_BANDWIDTH_ONLY = "bandwidth_only"
     LOGIC_TYPE_BANDWIDTH_BUFFER = "bandwidth_buffer"
-    LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE = "enhanced_buffer_response" # 积极响应缓冲区的逻辑
+    LOGIC_TYPE_BUFFER_ONLY = "buffer_only"
 
     def __init__(self, available_streams_from_master, broadcast_abr_decision_callback,
                  broadcast_bw_estimate_callback=None,
@@ -81,6 +81,8 @@ class ABRManager:
         self._internal_lock = threading.Lock()
         self._current_selected_url_for_logging = None
         self.current_player_buffer_s = 0.0
+        self.last_switch_time = 0
+        self.MIN_SWITCH_INTERVAL = 5  # 最小切换间隔时间，单位：秒
 
         # --- 存储选择的决策逻辑类型 ---
         self.logic_type = logic_type
@@ -194,8 +196,8 @@ class ABRManager:
             self._logic_bandwidth_only()
         elif self.logic_type == self.LOGIC_TYPE_BANDWIDTH_BUFFER:
             self._logic_bandwidth_buffer()
-        elif self.logic_type == self.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE:
-            self._logic_enhanced_buffer_response()
+        elif self.logic_type == self.LOGIC_TYPE_BUFFER_ONLY:
+            self._logic_buffer_only()
         else:
             logger.warning(f"Unknown ABR logic type: {self.logic_type}. Defaulting to bandwidth_buffer.")
             self._logic_bandwidth_buffer()
@@ -223,6 +225,8 @@ class ABRManager:
         # 从最高码率往下找，找到第一个能被目标带宽支持的
         for i in range(len(self.available_streams) - 1, -1, -1):
             stream_bw = self.available_streams[i].get('bandwidth', 0)
+            # print(i, stream_bw, target_bitrate_bps)
+            print(f"ABR LOGIC (BW_ONLY): Checking level {i} with BW={stream_bw/1000:.0f}Kbps, now we have {target_bitrate_bps/1000:.0f}Kbps.")
             if target_bitrate_bps >= stream_bw:
                 next_best_index = i
                 break
@@ -245,7 +249,7 @@ class ABRManager:
     def _logic_bandwidth_buffer(self):
         if not self.available_streams or len(self.available_streams) <= 1: return
 
-        estimated_bw_bps = self._estimate_bandwidth_simple_average() # 简单平均
+        estimated_bw_bps = self._estimate_bandwidth_enhanced() # 稍微增强的带宽估计
         with self._internal_lock:
             current_buffer_s = self.current_player_buffer_s
         current_level_index = self.current_stream_index_by_abr
@@ -260,13 +264,19 @@ class ABRManager:
             logger.info("ABR LOGIC (BW_BUFFER): No bandwidth stats yet, sticking to current level.")
             return
 
-        BUFFER_THRESHOLD_LOW = 8.0
+        BUFFER_THRESHOLD_LOW = 10.0
+        BUFFER_THRESHOLD_MEDIUM = 15.0
         BUFFER_THRESHOLD_HIGH = 25.0
-        BUFFER_THRESHOLD_EMERGENCY = 3.0
+        BUFFER_THRESHOLD_EMERGENCY = 5.0
 
-        if current_buffer_s < BUFFER_THRESHOLD_LOW: dynamic_safety_factor = 0.7
-        elif current_buffer_s > BUFFER_THRESHOLD_HIGH: dynamic_safety_factor = 0.9
-        else: dynamic_safety_factor = 0.8
+        if current_buffer_s < BUFFER_THRESHOLD_LOW:
+            dynamic_safety_factor = 0.6
+        elif current_buffer_s < BUFFER_THRESHOLD_MEDIUM:
+            dynamic_safety_factor = 0.8
+        elif current_buffer_s < BUFFER_THRESHOLD_HIGH:
+            dynamic_safety_factor = 0.9
+        else:
+            dynamic_safety_factor = 0.95
 
         target_bitrate_bps = estimated_bw_bps * dynamic_safety_factor
         logger.debug(f"ABR LOGIC (BW_BUFFER): Dyn Safety: {dynamic_safety_factor:.2f}, Target Sel. BW: {target_bitrate_bps / 1000:.0f} Kbps")
@@ -303,113 +313,68 @@ class ABRManager:
         
         if next_best_index != current_level_index:
             # ... (广播决策的代码) ...
-            old_stream_info = self.available_streams[current_level_index]
-            self.current_stream_index_by_abr = next_best_index
-            new_stream_info = self.available_streams[self.current_stream_index_by_abr]
-            self._update_current_abr_selected_url_logging()
-            logger.info(f"ABR DECISION (BW_BUFFER): Switch from level {current_level_index} "
-                        f"(~{old_stream_info.get('bandwidth',0)/1000:.0f}Kbps) to {next_best_index} "
-                        f"(~{new_stream_info.get('bandwidth',0)/1000:.0f}Kbps). Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
-            self.broadcast_abr_decision(self.current_stream_index_by_abr)
+            if time.time() - self.last_switch_time < self.MIN_SWITCH_INTERVAL:
+                logger.info(f"ABR LOGIC (BW_BUFFER): Too soon to switch. Waiting for {self.MIN_SWITCH_INTERVAL - (time.time() - self.last_switch_time):.2f}s.")
+                next_best_index = current_level_index
+            else:
+                self.last_switch_time = time.time()
+                old_stream_info = self.available_streams[current_level_index]
+                self.current_stream_index_by_abr = next_best_index
+                new_stream_info = self.available_streams[self.current_stream_index_by_abr]
+                self._update_current_abr_selected_url_logging()
+                logger.info(f"ABR DECISION (BW_BUFFER): Switch from level {current_level_index} "
+                            f"(~{old_stream_info.get('bandwidth',0)/1000:.0f}Kbps) to {next_best_index} "
+                            f"(~{new_stream_info.get('bandwidth',0)/1000:.0f}Kbps). Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
+                self.broadcast_abr_decision(self.current_stream_index_by_abr)
         else:
             logger.info(f"ABR DECISION (BW_BUFFER): No change from level {current_level_index}. Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
 
 
-    # --- 决策逻辑: 增强的缓冲区响应和带宽估计 ---
-    def _logic_enhanced_buffer_response(self):
-        if not self.available_streams or len(self.available_streams) <= 1: return
+    # 决策逻辑3: 只看缓冲区
+    def _logic_buffer_only(self):
+        if not self.available_streams or len(self.available_streams) <= 1:
+            return
 
-        estimated_bw_bps = self._estimate_bandwidth_enhanced() # 使用增强的带宽估计
         with self._internal_lock:
             current_buffer_s = self.current_player_buffer_s
         current_level_index = self.current_stream_index_by_abr
-        
+
         logger.info(
-            f"ABR LOGIC (ENHANCED): Est. BW: {estimated_bw_bps / 1000:.0f} Kbps, "
-            f"Buffer: {current_buffer_s:.2f}s, "
+            f"ABR LOGIC (BUFFER_ONLY): Buffer: {current_buffer_s:.2f}s, "
             f"Current Level Idx: {current_level_index}"
         )
 
-        # 定义阈值 (可以与 BW_BUFFER 逻辑中的不同)
-        BUFFER_LOW_WARNING = 10.0  # s, 警告阈值，低于此值应更积极考虑降级
-        BUFFER_LOW_CRITICAL = 5.0  # s, 危险阈值，强烈建议降级，甚至跳级
-        BUFFER_HIGH_SAFE = 20.0    # s, 安全阈值，高于此值且带宽允许时可考虑升级
-        BUFFER_STABLE_TARGET = 15.0 # s, 期望的稳定缓冲目标 (用于更细致的调整)
+        # 定义缓冲区阈值
+        BUFFER_THRESHOLD_LOW = 10.0
+        BUFFER_THRESHOLD_HIGH = 25.0
+        next_best_index = current_level_index
 
-        # 带宽利用率和安全系数
-        # safety_factor_normal = 0.85
-        # safety_factor_aggressive_upgrade = 0.90 # 缓冲区很高时
-        # safety_factor_conservative_downgrade = 0.75 # 缓冲区很低时
-        
-        next_best_index = current_level_index # 默认保持当前
+        # 缓冲区过高，尝试提升质量
+        if current_buffer_s > BUFFER_THRESHOLD_HIGH and current_level_index < len(self.available_streams) - 1:
+            next_best_index = current_level_index + 1
+            logger.info(f"ABR LOGIC (BUFFER_ONLY): High buffer ({current_buffer_s:.2f}s), attempting upgrade to {next_best_index}.")
 
-        # 1. 处理下载错误 (示例：如果最近有下载错误，则更保守)
-        #    在 self.segment_download_stats 中检查 'error': True 的记录
-        recent_errors = [s for s in self.segment_download_stats if s.get('error') and time.time() - s.get('time', 0) < 10] # 例如10秒内的错误
-        if recent_errors:
-            logger.warning(f"ABR LOGIC (ENHANCED): Recent download errors detected. Being more conservative.")
-            # 此处可以临时降低安全系数或强制检查降级
-
-
-        # 2. 缓冲区过低时的紧急/关键处理
-        if current_buffer_s < BUFFER_LOW_CRITICAL and current_level_index > 0:
-            # 降到最低或者能维持的最低（基于一个非常保守的带宽估计）
-            # 此时，我们甚至可以忽略当前的 estimated_bw_bps，因为它可能滞后
-            # 直接尝试降一级，或者如果缓冲区非常非常低，直接降到0
-            if current_buffer_s < BUFFER_LOW_CRITICAL / 2: # 例如，小于危险阈值的一半
-                 next_best_index = 0
-                 logger.warning(f"ABR LOGIC (ENHANCED): CRITICALLY LOW BUFFER ({current_buffer_s:.2f}s)! Forcing to lowest quality (idx 0).")
-            else:
-                 next_best_index = max(0, current_level_index - 1) # 至少降一级
-                 logger.warning(f"ABR LOGIC (ENHANCED): Low buffer ({current_buffer_s:.2f}s). Considering downgrade to {next_best_index}.")
-
-        # 3. 尝试升级 (缓冲区安全，带宽允许)
-        elif current_buffer_s > BUFFER_HIGH_SAFE and current_level_index < len(self.available_streams) - 1:
-            # 使用一个相对积极的安全系数来判断能否升级
-            target_upgrade_bw = estimated_bw_bps * 0.90 # 例如用90%的估计带宽
-            potential_upgrade_index = current_level_index
-            # 从当前等级的下一个开始，找到能支撑的最高等级
-            for i in range(current_level_index + 1, len(self.available_streams)):
-                if target_upgrade_bw >= self.available_streams[i].get('bandwidth', 0):
-                    potential_upgrade_index = i # 继续尝试更高的
-                else:
-                    break # 这个等级无法支撑，更高级别也不行
-            if potential_upgrade_index > current_level_index:
-                logger.info(f"ABR LOGIC (ENHANCED): UPGRADE condition met. Buffer ({current_buffer_s:.2f}s), TargetBW ({target_upgrade_bw/1000:.0f}Kbps). Potential idx: {potential_upgrade_index}")
-                next_best_index = potential_upgrade_index
-
-        # 4. 尝试降级 (缓冲区警告，或带宽不足以维持当前)
-        #    (确保这个条件不会与上面的紧急处理冲突或重复太多)
-        elif (current_buffer_s < BUFFER_LOW_WARNING and current_level_index > 0 and next_best_index == current_level_index) or \
-             (estimated_bw_bps * 0.80 < self.available_streams[current_level_index].get('bandwidth', 0) and current_level_index > 0 and next_best_index == current_level_index) :
-            # 使用一个相对保守的带宽估计来选择降级目标
-            target_downgrade_bw = estimated_bw_bps * 0.80 # 用80%的估计带宽，或更低
-            
-            # 从当前等级往下找，找到第一个能被target_downgrade_bw稳定支持的
-            # 如果没有，则选择最低（索引0）
-            new_idx = 0 # 默认降到最低
-            for i in range(current_level_index - 1, -1, -1):
-                if target_downgrade_bw >= self.available_streams[i].get('bandwidth', 0):
-                    new_idx = i
-                    break 
-            logger.info(f"ABR LOGIC (ENHANCED): DOWNGRADE condition met. Buffer ({current_buffer_s:.2f}s), EstBW ({estimated_bw_bps/1000:.0f}Kbps). Potential idx: {new_idx}")
-            next_best_index = new_idx
-            
-        # 5. 避免过于频繁的切换：可以加入一个计时器，两次切换之间至少间隔多久
-        #     if time.time() - self.last_switch_time < MIN_INTERVAL_BETWEEN_SWITCHES: return
+        # 缓冲区过低，尝试降低质量
+        elif current_buffer_s < BUFFER_THRESHOLD_LOW and current_level_index > 0:
+            next_best_index = current_level_index - 1
+            logger.info(f"ABR LOGIC (BUFFER_ONLY): Low buffer ({current_buffer_s:.2f}s), attempting downgrade to {next_best_index}.")
 
         if next_best_index != current_level_index:
-            # ... (广播决策的代码) ...
-            old_stream_info = self.available_streams[current_level_index]
-            self.current_stream_index_by_abr = next_best_index
-            new_stream_info = self.available_streams[self.current_stream_index_by_abr]
-            self._update_current_abr_selected_url_logging()
-            logger.info(f"ABR DECISION (ENHANCED): Switch from level {current_level_index} "
-                        f"(~{old_stream_info.get('bandwidth',0)/1000:.0f}Kbps) to {next_best_index} "
-                        f"(~{new_stream_info.get('bandwidth',0)/1000:.0f}Kbps). Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
-            self.broadcast_abr_decision(self.current_stream_index_by_abr)
+            if time.time() - self.last_switch_time < self.MIN_SWITCH_INTERVAL:
+                logger.info(f"ABR LOGIC (BUFFER_ONLY): Too soon to switch. Waiting for {self.MIN_SWITCH_INTERVAL - (time.time() - self.last_switch_time):.2f}s.")
+                next_best_index = current_level_index
+            else:
+                self.last_switch_time = time.time()
+                old_stream_info = self.available_streams[current_level_index]
+                self.current_stream_index_by_abr = next_best_index
+                new_stream_info = self.available_streams[self.current_stream_index_by_abr]
+                self._update_current_abr_selected_url_logging()
+                logger.info(f"ABR DECISION (BUFFER_ONLY): Switch from level {current_level_index} "
+                            f"(~{old_stream_info.get('bandwidth',0)/1000:.0f}Kbps) to {next_best_index} "
+                            f"(~{new_stream_info.get('bandwidth',0)/1000:.0f}Kbps). Buf={current_buffer_s:.2f}s")
+                self.broadcast_abr_decision(self.current_stream_index_by_abr)
         else:
-            logger.info(f"ABR DECISION (ENHANCED): No change from level {current_level_index}. Est.BW={estimated_bw_bps/1000:.0f}Kbps, Buf={current_buffer_s:.2f}s")
+            logger.info(f"ABR DECISION (BUFFER_ONLY): No change from level {current_level_index}. Buf={current_buffer_s:.2f}s")
 
 
     def abr_loop(self):
