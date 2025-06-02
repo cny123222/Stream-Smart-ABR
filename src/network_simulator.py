@@ -1,36 +1,32 @@
 import time
 import threading
 import logging
-import socket # For socket.error, to be caught by the caller
+import socket # 用于socket.error，由调用者捕获
 
-# logger = logging.getLogger('NetworkSimulator')
-# It's often better to pass the logger instance or use the calling module's logger
-# For now, we'll assume a logger is configured in the main client.
-# If this module is run standalone for testing, basicConfig might be needed.
-logger = logging.getLogger(__name__) # Use the module's own logger name
+logger = logging.getLogger(__name__) # 使用模块自己的logger名称
 
-# --- Global for Simulation ---
-g_simulated_bandwidth_bps = None  # None means no simulation, in bits per second
+# --- 模拟的全局变量 ---
+g_simulated_bandwidth_bps = None  # None表示无模拟，单位为比特每秒
 g_simulation_lock = threading.Lock()
 
-g_network_update_callback = None  # Callback for network updates, if needed
+g_bandwidth_update_callback = None  # 网络更新的回调函数，如有需要
 
 def set_simulated_bandwidth(bps):
     """
-    Sets the target simulated bandwidth.
+    设置目标模拟带宽。
 
-    Args:
-        bps (int or None): Target bandwidth in bits per second. None to disable simulation.
+    参数:
+        bps (int或None): 目标带宽，单位为比特每秒。None表示禁用模拟。
     """
     global g_simulated_bandwidth_bps
     with g_simulation_lock:
         g_simulated_bandwidth_bps = bps
         status_message = {}
         if bps is None:
-            logger.info("=> NET_SIM: Throttling disabled (full speed).") #
+            logger.info("=> NET_SIM: Throttling disabled (full speed).") 
             status_message = {"status": "Full Speed"}
         else:
-            logger.info(f"=> NET_SIM: Bandwidth target set to {bps / 1_000_000:.2f} Mbps.") #
+            logger.info(f"=> NET_SIM: Bandwidth target set to {bps / 1_000_000:.2f} Mbps.") 
             status_message = {"bandwidth_Mbps": bps / 1_000_000}
             
         if g_bandwidth_update_callback:
@@ -41,98 +37,99 @@ def set_simulated_bandwidth(bps):
 
 def get_current_simulated_bandwidth():
     """
-    Gets the current target simulated bandwidth.
+    获取当前目标模拟带宽。
 
-    Returns:
-        int or None: Current bandwidth in bps, or None if disabled.
+    返回:
+        int或None: 当前带宽，单位为bps，如果禁用则为None。
     """
     with g_simulation_lock:
         return g_simulated_bandwidth_bps
     
 def set_bandwidth_update_callback(callback_func):
+    """设置带宽更新回调函数"""
     global g_bandwidth_update_callback
     g_bandwidth_update_callback = callback_func
 
 def throttle_data_transfer(data_to_send, target_bps, output_stream, segment_name_for_log="Unknown Segment"):
     """
-    Sends data_to_send to output_stream, throttled to target_bps.
-    This function will write to output_stream and introduce delays.
-    It can raise socket.error if output_stream.write() fails.
+    将data_to_send发送到output_stream，限制到target_bps。
+    此函数将写入output_stream并引入延迟。
+    如果output_stream.write()失败，可能引发socket.error。
 
-    Args:
-        data_to_send (bytes): The byte string of data to send.
-        target_bps (int): The target bandwidth in bits per second.
-        output_stream (file-like): The stream to write to (e.g., self.wfile in a handler).
-        segment_name_for_log (str): Name of the segment for logging purposes.
+    参数:
+        data_to_send (bytes): 要发送的字节字符串数据。
+        target_bps (int): 目标带宽，单位为比特每秒。
+        output_stream (类文件对象): 要写入的流（例如，处理器中的self.wfile）。
+        segment_name_for_log (str): 用于记录日志的分片名称。
 
-    Returns:
-        float: The expected transfer time in seconds based on target_bps and data_size.
+    返回:
+        float: 基于target_bps和data_size的预期传输时间（秒）。
     
-    Raises:
-        socket.error: If an error occurs during writing to the output_stream.
+    异常:
+        socket.error: 如果写入output_stream时发生错误。
     """
     data_size_bytes = len(data_to_send)
     if data_size_bytes == 0:
         return 0.0
 
     simulated_bytes_per_sec = target_bps / 8
-    if simulated_bytes_per_sec <= 0: # Avoid division by zero or negative rates
-        # If rate is zero or invalid, effectively infinite time, or send as one chunk with minimal delay
-        # For practical purposes, let's assume it's a very slow rate but not zero.
-        # This case should ideally be handled by the caller ensuring target_bps > 0.
-        # If it still happens, we can treat it as a minimal positive rate.
+    if simulated_bytes_per_sec <= 0: # 避免除零或负速率
+        # 如果速率为零或无效，实际上是无限时间，或以最小延迟发送一个块
+        # 出于实用目的，我们假设这是一个非常慢的速率但不为零。
+        # 这种情况理想情况下应该由调用者处理，确保target_bps > 0。
+        # 如果仍然发生，我们可以将其视为最小正速率。
         logger.warning(f"NET_SIM: Invalid target_bps ({target_bps}). Assuming a very slow rate for segment {segment_name_for_log}.")
-        simulated_bytes_per_sec = 1 # 1 byte per second (extremely slow)
+        simulated_bytes_per_sec = 1 # 每秒1字节（极慢）
 
     expected_transfer_time_seconds = data_size_bytes / simulated_bytes_per_sec
 
-    # Log before starting the actual throttled sending
+    # 在开始实际限速发送之前记录日志
     logger.info(
         f"NET_SIM: Simulating download at {target_bps / 1_000_000:.2f} Mbps "
         f"for {segment_name_for_log} ({data_size_bytes / 1024:.1f} KB), "
         f"expected time: {expected_transfer_time_seconds:.2f}s"
     )
 
-    chunk_size = 4 * 1024  # Send in 4KB chunks
+    chunk_size = 4 * 1024  # 以4KB块发送
     bytes_sent = 0
 
-    # The caller (proxy handler) should catch socket.error from this block
+    # 调用者（代理处理器）应该从此块中捕获socket.error
     while bytes_sent < data_size_bytes:
         chunk = data_to_send[bytes_sent : bytes_sent + chunk_size]
-        if not chunk: # Should not happen if data_size_bytes > 0
+        if not chunk: # 如果data_size_bytes > 0，不应该发生
             break
         
         output_stream.write(chunk)
-        output_stream.flush() # Ensure data is sent over the socket
+        output_stream.flush() # 确保数据通过套接字发送
 
         bytes_sent += len(chunk)
         
-        # Calculate delay for this chunk based on simulated bandwidth
+        # 基于模拟带宽计算此块的延迟
         delay_for_chunk = len(chunk) / simulated_bytes_per_sec
-        time.sleep(delay_for_chunk) # Introduce delay
+        time.sleep(delay_for_chunk) # 引入延迟
     
     return expected_transfer_time_seconds
 
 class NetworkScenarioPlayer:
     """
-    Manages and plays a sequence of network bandwidth changes in a separate thread.
+    在单独线程中管理和播放网络带宽变化序列。
     """
     def __init__(self):
-        self.scenario_steps = [] # List of (delay_before_next_step_seconds, bandwidth_bps_or_None)
+        self.scenario_steps = [] # (下一步前延迟秒数, 带宽bps或None)的列表
         self._thread = None
-        self._stop_event = threading.Event() # Used to signal the thread to stop
+        self._stop_event = threading.Event() # 用于信号线程停止
 
     def add_step(self, duration_seconds, bandwidth_bps):
         """
-        Adds a step to the simulation scenario.
-        Each step defines a bandwidth that will be active for a certain duration.
+        向模拟场景添加一个步骤。
+        每个步骤定义一个在特定持续时间内活跃的带宽。
 
-        Args:
-            duration_seconds (float): How long this bandwidth setting should last.
-            bandwidth_bps (int or None): Target bandwidth in bps for this step. None for full speed.
+        参数:
+            duration_seconds (float): 此带宽设置应持续多长时间。
+            bandwidth_bps (int或None): 此步骤的目标带宽，单位为bps。None表示全速。
         """
         self.scenario_steps.append((duration_seconds, bandwidth_bps))
-        return self # Allow chaining
+        return self # 允许链式调用
 
     def _play_scenario_target(self):
         logger.info("SIM_CTRL: Network simulation scenario player thread started.")
@@ -151,20 +148,17 @@ class NetworkScenarioPlayer:
             set_simulated_bandwidth(bandwidth_bps)
             
             if duration_seconds > 0:
-                # Wait for the duration of this step, or until stop_event is set
+                # 等待此步骤的持续时间，或直到设置stop_event
                 self._stop_event.wait(timeout=duration_seconds)
             
             total_elapsed_time_for_logging += duration_seconds
 
-        if not self._stop_event.is_set(): # If scenario completed naturally
+        if not self._stop_event.is_set(): # 如果场景自然完成
              logger.info("SIM_CTRL: All scenario steps completed.")
-             # Consider setting to None at the very end if not explicitly done by the last step
-             # For example: if self.scenario_steps and self.scenario_steps[-1][1] is not None:
-             # set_simulated_bandwidth(None) # Optional: reset to full speed after scenario
         logger.info("SIM_CTRL: Network simulation scenario player thread finished.")
 
     def start(self):
-        """Starts playing the scenario in a new thread."""
+        """在新线程中开始播放场景。"""
         if self._thread and self._thread.is_alive():
             logger.warning("SIM_CTRL: Scenario player thread is already running.")
             return
@@ -173,22 +167,22 @@ class NetworkScenarioPlayer:
             logger.warning("SIM_CTRL: No scenario steps defined. Player will not start.")
             return
 
-        self._stop_event.clear() # Clear stop event from previous runs
+        self._stop_event.clear() # 清除之前运行的停止事件
         self._thread = threading.Thread(target=self._play_scenario_target, daemon=True, name="SimScenarioThread")
         self._thread.start()
         logger.info("SIM_CTRL: Scenario player initiated.")
 
     def stop(self):
-        """Signals the scenario player thread to stop and waits for it to join."""
+        """信号场景播放器线程停止并等待其加入。"""
         if self._thread and self._thread.is_alive():
             logger.info("SIM_CTRL: Signaling scenario player thread to stop...")
-            self._stop_event.set() # Signal the thread to stop
-            self._thread.join(timeout=5.0) # Wait for the thread to finish
+            self._stop_event.set() # 信号线程停止
+            self._thread.join(timeout=5.0) # 等待线程结束
             if self._thread.is_alive():
                 logger.warning("SIM_CTRL: Scenario player thread did not stop cleanly within timeout.")
             else:
                 logger.info("SIM_CTRL: Scenario player thread stopped.")
-        self._thread = None # Clear the thread reference
+        self._thread = None # 清除线程引用
 
 # --- Example default scenario ---
 def create_default_simulation_scenario(mode = -1):
@@ -257,11 +251,11 @@ def create_default_simulation_scenario(mode = -1):
         player.add_step(5, 500_000)    # 5秒0.5 Mbps
         player.add_step(5, 2_000_000)   # 5秒2 Mbps
         player.add_step(30, None)       # 最后，再30秒全速
-
+        
     return player
 
 if __name__ == '__main__':
-    # Basic test for the simulator module (optional)
+    # 模拟器模块的基本测试
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s')
     logger.info("Testing network_simulator.py standalone...")
     
@@ -270,7 +264,7 @@ if __name__ == '__main__':
     
     try:
         count = 0
-        while test_player._thread and test_player._thread.is_alive() and count < 300: # Run for max 5 minutes
+        while test_player._thread and test_player._thread.is_alive() and count < 300: # 最多运行5分钟
             time.sleep(1)
             current_bw = get_current_simulated_bandwidth()
             # logger.info(f"MainTest: Current simulated BW: {current_bw / 1_000_000 if current_bw else 'None'} Mbps")

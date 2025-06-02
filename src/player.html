@@ -128,13 +128,13 @@
         .status-bad { color: var(--error-color); }
         .status-neutral { color: var(--secondary-text-color); }
 
-        /* For smaller screens, stack panels */
+        /* 较小屏幕时，面板垂直堆叠 */
         @media (max-width: 768px) {
             .info-panels-container {
                 flex-direction: column;
             }
             .panel {
-                min-width: 100%; /* Full width on small screens */
+                min-width: 100%; /* 小屏幕上占满宽度 */
             }
         }
 
@@ -173,17 +173,21 @@
         </div>
 
         <div class="info-panels-container">
-            <div class="panel" id="playbackInfoPanel"> <h2>Current Stream Info</h2>
-                <p><span class="label">Video Name:</span> <span id="videoNameSpan" class="value">Loading...</span></p> <p><span class="label">Current Segment:</span> <span id="currentSegmentSpan" class="value">-</span></p>
+            <div class="panel" id="playbackInfoPanel"> 
+                <h2>Current Stream Info</h2>
+                <p><span class="label">Video Name:</span> <span id="videoNameSpan" class="value">Loading...</span></p> 
+                <p><span class="label">Current Segment:</span> <span id="currentSegmentSpan" class="value">-</span></p>
                 <p><span class="label">Displayed Quality:</span> <span id="displayedQualitySpan" class="value">-</span></p>
                 <p><span class="label">Loading Quality:</span> <span id="loadedQualitySpan" class="value">-</span></p>
             </div>
 
-            <div class="panel" id="networkQoePanel"> <h2>Performance Metrics</h2>
+            <div class="panel" id="networkQoePanel"> 
+                <h2>Performance Metrics</h2>
                 <p><span class="label">Buffer Level:</span> <span id="bufferLevelSpan" class="value">- s</span></p>
                 <p><span class="label">Network Simulator:</span> <span id="networkSimStatusSpan" class="value">N/A</span></p>
-                <p><span class="label">Estimated Bandwidth:</span> <span id="estimatedAbrBwSpan" class="value">N/A</span></p> <p><span class="label">Total Rebuffering:</span> <span id="rebufferingCountSpan" class="value">0 events</span>, <span id="rebufferingDurationSpan" class="value">0 ms</span></p>
-                </div>
+                <p><span class="label">Estimated Bandwidth:</span> <span id="estimatedAbrBwSpan" class="value">N/A</span></p> 
+                <p><span class="label">Total Rebuffering:</span> <span id="rebufferingCountSpan" class="value">0 events</span>, <span id="rebufferingDurationSpan" class="value">0 ms</span></p>
+            </div>
         </div>
     </div>
 
@@ -222,7 +226,7 @@
             let totalRebufferingEvents = 0;
             let totalRebufferingDurationMs = 0;
 
-            function sendQoeEvent(eventData) { //
+            function sendQoeEvent(eventData) { // 发送QoE事件到后端
                 if (ws.readyState === WebSocket.OPEN) {
                     if (!eventData.timestamp) {
                         eventData.timestamp = Date.now();
@@ -233,16 +237,16 @@
                 }
             }
 
-            ws.onopen = function() { //
+            ws.onopen = function() { // WebSocket连接打开事件
                 console.log("WebSocket connection established.");
             };
-            ws.onclose = function() { //
+            ws.onclose = function() { // WebSocket连接关闭事件
                 console.log("WebSocket connection closed.");
             };
-            ws.onerror = function(error) { //
+            ws.onerror = function(error) { // WebSocket错误事件
                 console.error("WebSocket error:", error);
             };
-            ws.onmessage = function(event) { //
+            ws.onmessage = function(event) { // WebSocket收到消息事件
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === "SET_LEVEL" && hlsInstance) {
@@ -258,7 +262,7 @@
                         } else {
                             console.warn(`Python ABR COMMAND: Invalid levelIndex ${newLevelIndex} or hlsInstance.levels not ready.`);
                         }
-                    } else if (message.type === "NETWORK_SIM_UPDATE") { //
+                    } else if (message.type === "NETWORK_SIM_UPDATE") { // 网络模拟器状态更新
                         console.log("Handling NETWORK_SIM_UPDATE with data:", message.data);
                         if (networkSimStatusSpan) { // 安全检查
                             if (message.data && typeof message.data.bandwidth_Mbps === 'number') {
@@ -269,7 +273,7 @@
                                 networkSimStatusSpan.textContent = "N/A";
                             }
                         }
-                    } else if (message.type === "ABR_BW_ESTIMATE_UPDATE") {
+                    } else if (message.type === "ABR_BW_ESTIMATE_UPDATE") { // 处理Python ABR估算的带宽更新
                         console.log("Handling ABR_BW_ESTIMATE_UPDATE with data:", message.data);
                         if (estimatedAbrBwSpan && message.data && typeof message.data.estimated_Mbps === 'number') { // 安全检查
                             estimatedAbrBwSpan.textContent = `${message.data.estimated_Mbps.toFixed(2)} Mbps`;
@@ -280,22 +284,22 @@
                 } catch (e) { console.error("Error processing message from WebSocket:", e); }
             };
 
-            let playInitiatedTimestamp = 0; //
-            let isFirstPlaySignal = true;  //
-            let isRebuffering = false; //
-            let rebufferingStartTime = 0; //
-            let jsPreviousLevel = -1; //
+            let playInitiatedTimestamp = 0; // 播放启动时间戳
+            let isFirstPlaySignal = true;  // 是否为首次播放信号
+            let isRebuffering = false; // 是否正在卡顿
+            let rebufferingStartTime = 0; // 卡顿开始时间
+            let jsPreviousLevel = -1; // JS记录的前一个质量级别
 
-            const originalVideoPlay = video.play; //
-            video.play = function(...args) { //
-                if (isFirstPlaySignal && playInitiatedTimestamp === 0) { // Modified from your "good" version, was just `isFirstPlaySignal`
+            const originalVideoPlay = video.play; // 保存原始播放方法
+            video.play = function(...args) { // 重写播放方法以记录播放启动时间
+                if (isFirstPlaySignal && playInitiatedTimestamp === 0) { // 从"好版本"修改，原来只是 `isFirstPlaySignal`
                     playInitiatedTimestamp = Date.now();
                     console.log("QoE JS: Play initiation (manual video.play) timestamped at", playInitiatedTimestamp);
                 }
                 return originalVideoPlay.apply(this, args);
             };
 
-            video.addEventListener('playing', function() {
+            video.addEventListener('playing', function() { // 视频开始播放事件
                 const currentEventTime = Date.now();
                 console.log("PLAYING event fired. isRebuffering (before):", isRebuffering, "isFirstPlaySignal:", isFirstPlaySignal);
                 if (isRebuffering) {
@@ -307,8 +311,8 @@
                     if(rebufferingDurationSpan) rebufferingDurationSpan.textContent = `${totalRebufferingDurationMs} ms`; // 确保 rebufferingDurationSpan 有效
                 }
             });
-
-            video.addEventListener('waiting', function() {
+          
+            video.addEventListener('waiting', function() { // 视频等待（卡顿）事件
                 const currentEventTime = Date.now();
                 console.log("WAITING event fired. isFirstPlaySignal:", isFirstPlaySignal, 
                             "video.currentTime:", video.currentTime, 
@@ -334,59 +338,59 @@
                 }
             });
             
-            video.addEventListener('ended', function() { //
+            video.addEventListener('ended', function() { // 视频播放结束事件
                 console.log("QoE JS: Playback naturally ended.");
                 sendQoeEvent({ event: "PLAYBACK_ENDED", timestamp: Date.now() });
                 stopBufferMonitoring();
             });
 
-            window.addEventListener('beforeunload', function() { //
+            window.addEventListener('beforeunload', function() { // 窗口关闭前事件
                 console.log("QoE JS: Window closing, sending PLAYBACK_ENDED.");
                 sendQoeEvent({ event: "PLAYBACK_ENDED", timestamp: Date.now() });
                 stopBufferMonitoring();
             });
 
-            if (Hls.isSupported()) { //
-                // Initialize HLS.js with its default settings first (autoLevelEnabled is true by default)
-                // We will override this in MANIFEST_PARSED for finer control, similar to your "good version"
+            if (Hls.isSupported()) { // 检查HLS支持
+                // 首先使用默认设置初始化HLS.js（autoLevelEnabled默认为true）
+                // 我们将在MANIFEST_PARSED中覆盖这些设置以便更精细控制，类似于你的"好版本"
                 hlsInstance = new Hls({ 
                     debug: false
-                    // We are NOT setting autoLevelEnabled: false or startLevel: 0 here initially
-                    // to more closely mimic your "good version's" implied startup behavior
-                    // before it forcefully sets them in MANIFEST_PARSED.
+                    // 我们初始时不设置 autoLevelEnabled: false 或 startLevel: 0
+                    // 以更紧密模拟在MANIFEST_PARSED中强制设置它们之前
+                    // 你的"好版本"暗示的启动行为
                 });
 
-                playInitiatedTimestamp = Date.now(); //
+                playInitiatedTimestamp = Date.now(); // 记录HLS初始化时间
                 console.log("QoE JS: Play initiation (HLS loadSource) timestamped at", playInitiatedTimestamp);
                 
-                hlsInstance.loadSource(masterM3u8Url); //
-                hlsInstance.attachMedia(video); //
+                hlsInstance.loadSource(masterM3u8Url); // 加载HLS源
+                hlsInstance.attachMedia(video); // 附加到视频元素
 
-                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function (event, data) { //
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function (event, data) { // 清单解析完成事件
                     console.log("HLS.js: Manifest parsed. Levels:", data.levels.map(l => ({bitrate: l.bitrate, resolution: `${l.width}x${l.height}`})));
                     
                     startBufferMonitoring();
 
-                    // --- Logic from your "good version" applied here ---
+                    // --- 从你的"好版本"应用的逻辑 ---
                     if (hlsInstance.levels && hlsInstance.levels.length > 0) {
-                        jsPreviousLevel = 0; // Assume starts at level 0 for QoE tracking
+                        jsPreviousLevel = 0; // 假设从级别0开始进行QoE跟踪
                         
-                        // Force HLS.js to start at level 0 and disable its ABR
-                        hlsInstance.currentLevel = 0;  // Force current level to 0
-                        hlsInstance.autoLevelCapping = -1; // Disable capping
-                        hlsInstance.autoLevelEnabled = false; // Disable HLS.js internal ABR
+                        // 强制HLS.js从级别0开始并禁用其ABR
+                        hlsInstance.currentLevel = 0;  // 强制当前级别为0
+                        hlsInstance.autoLevelCapping = -1; // 禁用封顶
+                        hlsInstance.autoLevelEnabled = false; // 禁用HLS.js内部ABR
                         
                         console.log("HLS.js: MANIFEST_PARSED - Forcing level 0 and disabling HLS.js ABR. Initial jsPreviousLevel:", jsPreviousLevel);
                         
-                        // Update UI for initial quality
+                        // 为初始质量更新UI
                         if (hlsInstance.levels[jsPreviousLevel]) {
                             const initialQualityText = `${hlsInstance.levels[jsPreviousLevel].height}p @ ${(hlsInstance.levels[jsPreviousLevel].bitrate / 1000).toFixed(0)} kbps`;
                             if (displayedQualitySpan) displayedQualitySpan.textContent = initialQualityText;
                             if (loadedQualitySpan) loadedQualitySpan.textContent = initialQualityText;
                         }
                         
-                        // Send initial level to Python QoE
-                        sendQoeEvent({ //
+                        // 向Python QoE发送初始级别
+                        sendQoeEvent({ // 发送初始质量切换事件
                             event: "QUALITY_SWITCH",
                             fromLevel: -1, 
                             toLevel: jsPreviousLevel,
@@ -394,20 +398,20 @@
                             timestamp: Date.now()
                         });
                     }
-                    // --- End of logic from "good version" ---
+                    // --- "好版本"逻辑结束 ---
                 });
 
-                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, function(event, data) { //
+                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, function(event, data) { // HLS级别切换事件
                     const newLevel = data.level;
                     const newBitrate = hlsInstance.levels[newLevel].bitrate;
                     const newHeight = hlsInstance.levels[newLevel].height;
                     console.log(`HLS.js EVENT: LEVEL_SWITCHED to level index: ${newLevel}, bitrate: ${newBitrate}`);
                     displayedQualitySpan.textContent = `${newHeight}p @ ${(newBitrate / 1000).toFixed(0)} kbps`;
 
-                    if (jsPreviousLevel !== newLevel) { // Modified from your "good" version, jsPreviousLevel === -1 condition was implicitly handled by first assignment
-                         sendQoeEvent({ //
+                    if (jsPreviousLevel !== newLevel) { // 从你的"好版本"修改，jsPreviousLevel === -1条件被MANIFEST_PARSED中的首次赋值隐式处理
+                         sendQoeEvent({ // 发送质量切换事件
                             event: "QUALITY_SWITCH",
-                            fromLevel: jsPreviousLevel, // jsPreviousLevel should be 0 initially from MANIFEST_PARSED
+                            fromLevel: jsPreviousLevel, // jsPreviousLevel应该从MANIFEST_PARSED中初始为0
                             toLevel: newLevel,
                             toBitrate: newBitrate,
                             timestamp: Date.now()
@@ -416,7 +420,7 @@
                     }
                 });
 
-                hlsInstance.on(Hls.Events.FRAG_CHANGED, function(event, data) {
+                hlsInstance.on(Hls.Events.FRAG_CHANGED, function(event, data) { // HLS分片切换事件
                     if (data && data.frag) {
                         const frag = data.frag;
                         const segmentName = frag.url.substring(frag.url.lastIndexOf('/') + 1);
@@ -425,18 +429,18 @@
                     }
                 });
                 
-                hlsInstance.on(Hls.Events.ERROR, function (event, data) {  //
+                hlsInstance.on(Hls.Events.ERROR, function (event, data) {  // HLS错误事件
                     console.error('HLS.js Error:', data);
                 });
 
-            } else if (video.canPlayType('application/vnd.apple.mpegurl')) { //
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) { // 原生HLS支持（Safari）
                 video.src = masterM3u8Url;
-            } else { //
+            } else { // 浏览器不支持HLS
                 alert("HLS is not supported in your browser.");
             }
 
-            let bufferMonitoringInterval = null; //
-            function startBufferMonitoring() { /* ... same as your previous new version ... */ //
+            let bufferMonitoringInterval = null; // 缓冲区监控定时器
+            function startBufferMonitoring() { // 开始缓冲区监控
                 if (bufferMonitoringInterval) {
                     clearInterval(bufferMonitoringInterval);
                 }
@@ -467,7 +471,7 @@
                 }, 1000);
             }
 
-            function stopBufferMonitoring() { /* ... same as your previous new version ... */ //
+            function stopBufferMonitoring() { // 停止缓冲区监控
                 if (bufferMonitoringInterval) {
                     clearInterval(bufferMonitoringInterval);
                     bufferMonitoringInterval = null;
