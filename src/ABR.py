@@ -555,7 +555,7 @@ class ABRManager:
             return
 
         # 更新带宽估计
-        self._estimate_bandwidth_simple_average()
+        estimated_bw_bps = self._get_ewma_throughput()
         
         # 获取当前状态
         current_state = self.get_current_state()
