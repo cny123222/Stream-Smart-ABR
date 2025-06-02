@@ -14,6 +14,7 @@ class QoEMetricsManager:
         self.rebuffering_events = [] # 存储 {'start_ts': timestamp_ms, 'duration_ms': duration_ms, 'end_ts': timestamp_ms}
         self.quality_switches_log = [] # 存储 {'timestamp': ms, 'from_level': idx, 'to_level': idx, 'to_bitrate': bps}
         self.write_path = ''
+        self.in_rebuffering = False
         
         self.session_active = False
         self.session_start_time_ms = 0
@@ -57,9 +58,11 @@ class QoEMetricsManager:
         self.update_time_at_level(timestamp_ms)
         self.rebuffering_events.append({'start_ts': timestamp_ms, 'duration_ms': 0, 'end_ts': None}) # 持续时间将被更新
         logger.info(f"QoE Event: Rebuffering Started at {timestamp_ms}")
+        self.in_rebuffering = True
 
     def record_rebuffering_end(self, timestamp_ms):
         self.start_session_if_needed(timestamp_ms) ## 应该已经激活
+        self.in_rebuffering = False
         # 查找最后一个未结束的卡顿事件
         for event in reversed(self.rebuffering_events):
             if event['end_ts'] is None:
@@ -100,8 +103,10 @@ class QoEMetricsManager:
 
         if timestamp_ms is None:
             timestamp_ms = time.time() * 1000
-        
-        self.update_time_at_level(timestamp_ms) # 计算自上次事件以来的时间
+        if not self.in_rebuffering:
+            self.update_time_at_level(timestamp_ms) # 计算自上次事件以来的时间
+        else:
+            self.record_rebuffering_end(timestamp_ms) # 确保最后一个卡顿事件被正确结束
         self.total_session_duration_ms = timestamp_ms - self.session_start_time_ms
         self.session_active = False
         logger.info(f"QoE: Playback session ended at {timestamp_ms}. Total duration: {self.total_session_duration_ms:.0f} ms.")
