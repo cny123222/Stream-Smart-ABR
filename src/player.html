@@ -169,7 +169,7 @@
 
     <div class="main-container">
         <div id="videoContainer">
-            <video id="videoPlayer" controls playsinline poster="placeholder-poster.png" autoplay></video>
+            <video id="videoPlayer" controls playsinline poster="placeholder-poster.png" autoplay muted></video>
         </div>
 
         <div class="info-panels-container">
@@ -302,6 +302,13 @@
             video.addEventListener('playing', function() { // 视频开始播放事件
                 const currentEventTime = Date.now();
                 console.log("PLAYING event fired. isRebuffering (before):", isRebuffering, "isFirstPlaySignal:", isFirstPlaySignal);
+                if (isFirstPlaySignal && playInitiatedTimestamp > 0) {
+                    const startupLatency = currentEventTime - playInitiatedTimestamp;
+                    console.log(`QoE JS: Startup Latency = ${startupLatency} ms`);
+                    sendQoeEvent({ event: "STARTUP_LATENCY", value: startupLatency, timestamp: currentEventTime });
+                    <!-- startupLatencySpan.textContent = `${startupLatency} ms`; -->
+                    isFirstPlaySignal = false;
+                }
                 if (isRebuffering) {
                     isRebuffering = false;
                     const rebufferingDuration = currentEventTime - rebufferingStartTime;
@@ -319,13 +326,6 @@
                             "video.paused:", video.paused, 
                             "video.ended:", video.ended,
                             "isRebuffering (before):", isRebuffering);
-                if (isFirstPlaySignal && playInitiatedTimestamp > 0) {
-                    const startupLatency = currentEventTime - playInitiatedTimestamp;
-                    console.log(`QoE JS: Startup Latency = ${startupLatency} ms`);
-                    sendQoeEvent({ event: "STARTUP_LATENCY", value: startupLatency, timestamp: currentEventTime });
-                    <!-- startupLatencySpan.textContent = `${startupLatency} ms`; -->
-                    isFirstPlaySignal = false;
-                }
                 if (!isFirstPlaySignal && video.currentTime > 0 && !video.paused && !video.ended) { 
                     if (!isRebuffering) {
                         isRebuffering = true;

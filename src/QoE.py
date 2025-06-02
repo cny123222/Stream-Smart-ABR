@@ -39,7 +39,7 @@ class QoEMetricsManager:
         if self.session_active and self.current_level_index != -1:
             duration_at_current_level_ms = event_timestamp_ms - self.last_event_timestamp_ms
             if duration_at_current_level_ms > 0:
-                print('oooooooo ', self.current_level_index, duration_at_current_level_ms, ' oooooooo')
+                # print('oooooooo ', self.current_level_index, duration_at_current_level_ms, ' oooooooo')
                 self.time_at_each_level[self.current_level_index] = \
                     self.time_at_each_level.get(self.current_level_index, 0) + duration_at_current_level_ms
         self.last_event_timestamp_ms = event_timestamp_ms
@@ -52,7 +52,7 @@ class QoEMetricsManager:
             self.last_event_timestamp_ms = timestamp_ms # 启动后更新最后事件时间
 
     def record_rebuffering_start(self, timestamp_ms):
-        print('wuwuwuwuwuwuwuwu', timestamp_ms)
+        # print('wuwuwuwuwuwuwuwu', timestamp_ms)
         self.start_session_if_needed(timestamp_ms)
         self.update_time_at_level(timestamp_ms)
         self.rebuffering_events.append({'start_ts': timestamp_ms, 'duration_ms': 0, 'end_ts': None}) # 持续时间将被更新
@@ -198,5 +198,5 @@ class QoEMetricsManager:
             status['quality'] = 1.0 * quality_val / tot
             status['PSNR'] = 1.0 * psnr_val / tot
         status['weighted_quality'] = 1.0 * status['quality'] + 1.5 * status['effective_ratio']
-        with open(self.write_path, 'a', encoding='utf-8') as f:
+        with open(self.write_path, 'w', encoding='utf-8') as f:
             json.dump(status, f, ensure_ascii=False, indent=4)

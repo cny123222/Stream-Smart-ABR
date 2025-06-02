@@ -9,6 +9,7 @@ import socketserver
 import socket
 import webbrowser
 import json # 用于WebSocket消息处理
+import signal
 
 # --- WebSocket和AsyncIO ---
 import asyncio
@@ -48,6 +49,15 @@ g_websocket_server_thread = None
 g_asyncio_loop_for_websocket = None
 g_websocket_stop_event = None # 将是一个asyncio.Event
 
+# 全局变量，用于指示程序是否应该退出
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handles termination signals like SIGINT and SIGTERM."""
+    global shutdown_requested
+    logger.info(f"Signal {signal.Signals(signum).name} received. Requesting shutdown...")
+    shutdown_requested = True
+
 # 全局实例
 qoe_manager = QoEMetricsManager()
 
@@ -70,7 +80,7 @@ async def handle_websocket_client(websocket):
                 message = json.loads(message_str)
                 if message.get("type") == "QOE_EVENT":
                     event_data = message.get("data", {})
-                    print('--------------  ', event_data, ' -----------awawa')
+                    # print('--------------  ', event_data, ' -----------awawa')
                     event_name = event_data.get("event")
                     if event_data.get("value") is not None and event_data.get("value") < 1.0 and not REBUFFERING:
                         REBUFFERING = True
@@ -81,6 +91,7 @@ async def handle_websocket_client(websocket):
                     timestamp = event_data.get("timestamp", time.time() * 1000)
 
                     if event_name == "STARTUP_LATENCY":
+                        print(f"---------11111 {event_data} 11111----------")
                         qoe_manager.record_startup_latency(event_data.get("value"), timestamp)
                     elif event_name == "REBUFFERING_START":
                         REBUFFERING = True
@@ -494,6 +505,7 @@ def stop_proxy_server():
 
 def main():
     global g_websocket_server_thread, g_asyncio_loop_for_websocket, qoe_manager
+    global shutdown_requested
 
     # 创建解析器对象
     parser = argparse.ArgumentParser(description='Client application with two integer arguments')
@@ -515,6 +527,10 @@ def main():
     qoe_manager.set_write_path(write_path)
     abr_manager_instance = None
     scenario_player = None # 在这里定义scenario_player以便在finally中访问
+    
+    # --- 注册信号处理器 ---
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler) # kill / terminate
 
     # AES密钥检查，DOWNLOAD_DIR创建
     if not hasattr(AES, 'AES_KEY') or not AES.AES_KEY: logger.error("AES_KEY missing!"); return
@@ -578,10 +594,21 @@ def main():
     webbrowser.open(player_url)
     logger.info("Client setup complete. Press Ctrl+C to stop.")
     
+    start_time = time.time()
+    RUNTIME_SECONDS = 30 # 设置期望的运行时间
+    
     try:
-        while True: 
-            time.sleep(60)
-            # qoe_manager.print_summary() # 可选的定期摘要
+        while not shutdown_requested:
+            current_runtime = time.time() - start_time
+            if current_runtime >= RUNTIME_SECONDS:
+                logger.info(f"Runtime limit ({RUNTIME_SECONDS} seconds) reached. Initiating shutdown...") # 日志修改为英文
+                shutdown_requested = True # 触发关闭
+                break # 退出循环以执行finally块
+
+            time.sleep(0.5)
+        
+        if shutdown_requested and not (current_runtime >= RUNTIME_SECONDS) : # 如果是因信号中断而非时间到达
+             logger.info("Shutdown requested by external signal...")
     except KeyboardInterrupt:
         logger.info("Ctrl+C pressed. Shutting down...")
     finally:
@@ -590,7 +617,9 @@ def main():
         abr_streams_info = None
         if abr_manager_instance and hasattr(abr_manager_instance, 'available_streams'):
             abr_streams_info = abr_manager_instance.available_streams
-        qoe_manager.log_playback_session_end(available_abr_streams=abr_streams_info) # 记录QoE会话结束
+            
+        if qoe_manager: # 检查qoe_manager是否已初始化
+            qoe_manager.log_playback_session_end(available_abr_streams=abr_streams_info)
         
         if abr_manager_instance:
             logger.info("Stopping ABR Manager...")
