@@ -241,10 +241,10 @@ def create_default_simulation_scenario(mode = -1):
 
     else:
         # 默认模式
-        player.add_step(20, None)  # 从20秒全速开始（允许初始缓冲）
-        player.add_step(40, 5_000_000)   # 然后，40秒5 Mbps
-        player.add_step(60, 800_000)    # 然后，60秒0.8 Mbps
-        player.add_step(60, 10_000_000)  # 然后，60秒10 Mbps
+        player.add_step(20, 10_000_000)  # 从20秒全速开始（允许初始缓冲）
+        player.add_step(20, 5_000_000)   # 然后，40秒5 Mbps
+        player.add_step(20, 800_000)    # 然后，60秒0.8 Mbps
+        player.add_step(20, 10_000_000)  # 然后，60秒10 Mbps
         # 总共20秒更快速波动的示例
         player.add_step(5, 500_000)    # 5秒0.5 Mbps
         player.add_step(5, 2_000_000)   # 5秒2 Mbps
