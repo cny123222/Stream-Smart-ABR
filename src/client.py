@@ -573,11 +573,17 @@ def main():
         selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
         # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
         if abr_decision == 1:
-            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
+            selected_logic = ABRManager.LOGIC_TYPE_SLBW
         elif abr_decision == 2:
-            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+            selected_logic = ABRManager.LOGIC_TYPE_SWMA
         elif abr_decision == 3:
+            selected_logic = ABRManager.LOGIC_TYPE_EWMA
+        elif abr_decision == 4:
             selected_logic = ABRManager.LOGIC_TYPE_BUFFER_ONLY
+        elif abr_decision == 5:
+            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+        elif abr_decision == 6:
+            selected_logic = ABRManager.LOGIC_TYPE_COMPREHENSIVE
         else:
             logger.error("Invalid ABR decision. Using default logic.")
             selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
