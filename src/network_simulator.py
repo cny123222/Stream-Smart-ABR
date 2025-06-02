@@ -246,9 +246,17 @@ def create_default_simulation_scenario(mode = -1):
         player.add_step(120, 5_000_000)
 
     else:
-        # 默认模式：类似之前的低带宽场景
-        player.add_step(200, 800_000)
-        player.add_step(10, None)
+        # 默认模式
+        player.add_step(20, None)  # 从20秒全速开始（允许初始缓冲）
+        player.add_step(40, 5_000_000)   # 然后，40秒5 Mbps
+        player.add_step(60, 800_000)    # 然后，60秒0.8 Mbps
+        player.add_step(60, 10_000_000)  # 然后，60秒10 Mbps
+        # 总共20秒更快速波动的示例
+        player.add_step(5, 500_000)    # 5秒0.5 Mbps
+        player.add_step(5, 2_000_000)   # 5秒2 Mbps
+        player.add_step(5, 500_000)    # 5秒0.5 Mbps
+        player.add_step(5, 2_000_000)   # 5秒2 Mbps
+        player.add_step(30, None)       # 最后，再30秒全速
 
     return player
 
