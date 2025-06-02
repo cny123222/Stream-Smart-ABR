@@ -586,7 +586,7 @@ def main():
         elif abr_decision == 6:
             selected_logic = ABRManager.LOGIC_TYPE_COMPREHENSIVE
         elif abr_decision == 7:
-            selected_logic = ABRManager.LOGIC_TYPES_DQN
+            selected_logic = ABRManager.LOGIC_TYPE_DQN
         else:
             logger.error("Invalid ABR decision. Using default logic.")
             selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
