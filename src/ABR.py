@@ -107,7 +107,7 @@ class ABRManager:
                  broadcast_bw_estimate_callback=None,
                  logic_type=LOGIC_TYPE_BANDWIDTH_BUFFER, # 默认使用带宽+缓冲区逻辑
                  # --- 带宽估计相关参数 --- #
-                 max_bw_stats_history=5,  # SWMA和EWMA等可能用到的历史窗口大小
+                 max_bw_stats_history=4,  # SWMA和EWMA等可能用到的历史窗口大小
                  ewma_alpha=0.7,          # EWMA的平滑因子alpha
                  # --- 切换抑制参数 --- #
                  min_switch_interval_seconds=5.0, # 最小切换间隔
@@ -136,6 +136,7 @@ class ABRManager:
 
         # 带宽估计值
         self.estimated_bandwidth_bps = 0.0      # 通用带宽估计值
+        self.swma_bandwidth_bps = 0.0          # SWMA带宽估计值
         self.ewma_bandwidth_bps = 0.0           # EWMA专用带宽估计值
         self.ewma_alpha = ewma_alpha            # EWMA平滑因子
 
@@ -211,6 +212,10 @@ class ABRManager:
             timestamp = time.time()
             
             with self._internal_lock:
+                old_ewma_for_log = self.ewma_bandwidth_bps # 保存更新前的值用于日志
+                current_throughput_for_log = throughput_bps # 保存当前样本用于日志
+                current_alpha_for_log = self.ewma_alpha # 保存当前alpha用于日志
+                
                 # 更新通用下载统计 (用于SWMA等)
                 self.segment_download_stats.append({
                     'url': url, 'size': size_bytes, 'duration': duration_seconds,
@@ -223,12 +228,21 @@ class ABRManager:
                 self.bandwidth_history_for_trend.append((timestamp, throughput_bps))
                 if len(self.bandwidth_history_for_trend) > self.MAX_BW_HISTORY_FOR_TREND:
                     self.bandwidth_history_for_trend.pop(0)
+                    
+                # 更新SWMA带宽估计值
+                if self.segment_download_stats:
+                    throughputs = [s['throughput_bps'] for s in self.segment_download_stats if 'throughput_bps' in s]
+                    if not throughputs:
+                        return 0.0  
+                    self.swma_bandwidth_bps = sum(throughputs) / len(throughputs)
                 
                 # 更新EWMA带宽估计值
                 if self.ewma_bandwidth_bps == 0.0:
                     self.ewma_bandwidth_bps = throughput_bps
                 else:
-                    self.ewma_bandwidth_bps = self.ewma_alpha * throughput_bps + (1 - self.ewma_alpha) * self.ewma_bandwidth_bps
+                    term1 = self.ewma_alpha * throughput_bps
+                    term2_factor = (1 - self.ewma_alpha)
+                    term2 = term2_factor * self.ewma_bandwidth_bps
                 
                 # 如果成功下载的是当前追踪的“卡住风险”分片，则重置相关状态
                 if url == self.current_segment_url_being_downloaded:
@@ -286,6 +300,7 @@ class ABRManager:
             'error': True,
             'time': time.time()
         })
+        self.consecutive_segment_timeouts += 1 # 增加连续超时计数
         if len(self.segment_download_stats) > self.max_bw_stats_history:
             self.segment_download_stats.pop(0)
             
@@ -314,18 +329,9 @@ class ABRManager:
     def _get_swma_throughput(self):
         # 计算最近N个分片吞吐量的简单移动平均 (用于SWMA)
         with self._internal_lock:
-            if not self.segment_download_stats:
-                return 0.0
-            
-            # 只考虑包含有效吞吐量数据的统计项
-            throughputs = [s['throughput_bps'] for s in self.segment_download_stats if 'throughput_bps' in s]
-            if not throughputs:
-                return 0.0
-            
-            estimated_throughput_bps = sum(throughputs) / len(throughputs)
-            if self.broadcast_bw_estimate and estimated_throughput_bps > 0:
-                self.broadcast_bw_estimate(estimated_throughput_bps / 1_000_000)
-            return estimated_throughput_bps
+            if self.broadcast_bw_estimate and self.swma_bandwidth_bps > 0:
+                self.broadcast_bw_estimate(self.swma_bandwidth_bps / 1_000_000)
+            return self.swma_bandwidth_bps
         
     def _get_ewma_throughput(self):
         # 获取指数加权移动平均带宽 (用于EWMA)
@@ -451,23 +457,27 @@ class ABRManager:
             self._logic_bandwidth_buffer()
             
     # --- 辅助方法：执行切换决策 ---
-    def _execute_switch_decision(self, next_best_index, current_logic_name, decision_rationale_log=""):
+    def _execute_switch_decision(self, next_best_index, current_logic_name, decision_rationale_log="", is_emergency=False):
         # 封装通用的切换逻辑，包括日志记录和广播
         current_level_index = self.current_stream_index_by_abr
         
         if next_best_index == current_level_index:
-            logger.info(f"ABR DECISION ({current_logic_name}): No change from current level {current_level_index}. {decision_rationale_log}") # 日志: 无需切换
+            # logger.info(f"ABR DECISION ({current_logic_name}): No change from current level {current_level_index}. {decision_rationale_log}") # 这条日志可能太频繁，只在真决策时打
             return
 
         # 切换抑制逻辑
-        if time.time() - self.last_switch_time < self.MIN_SWITCH_INTERVAL:
-            logger.info(f"ABR DECISION ({current_logic_name}): Switch to level {next_best_index} proposed, "
-                        f"but it's too soon since last switch ({time.time() - self.last_switch_time:.1f}s ago). "
-                        f"Holding current level {current_level_index}.") # 日志: 切换过于频繁
-            return # 保持当前等级，不进行切换
+        current_min_switch_interval = self.MIN_SWITCH_INTERVAL
+        if is_emergency: # 如果是紧急情况（例如，强制降到最低码率）
+            current_min_switch_interval = self.COMP_PARAMS.get("min_switch_interval_emergency_override_s", 1.0) # 允许更快的紧急切换
+            logger.warning(f"ABR: Emergency condition detected, using shorter switch interval: {current_min_switch_interval}s")
 
-        # 执行切换
-        self.last_switch_time = time.time() # 更新上次切换时间
+        if time.time() - self.last_switch_time < current_min_switch_interval:
+            logger.info(f"ABR DECISION ({current_logic_name}): Switch to level {next_best_index} proposed, "
+                        f"but it's too soon since last switch ({time.time() - self.last_switch_time:.1f}s ago, MinInterval: {current_min_switch_interval:.1f}s). "
+                        f"Holding current level {current_level_index}. Rationale for proposed switch: {decision_rationale_log}")
+            return 
+
+        self.last_switch_time = time.time() 
         old_stream_info = self.available_streams[current_level_index]
         self.current_stream_index_by_abr = next_best_index
         new_stream_info = self.available_streams[next_best_index]
@@ -475,7 +485,7 @@ class ABRManager:
 
         logger.info(f"ABR DECISION ({current_logic_name}): Switch from level {current_level_index} "
                     f"(~{old_stream_info.get('bandwidth',0)/1000:.0f}Kbps) to {next_best_index} "
-                    f"(~{new_stream_info.get('bandwidth',0)/1000:.0f}Kbps). {decision_rationale_log}") # 日志: 执行切换
+                    f"(~{new_stream_info.get('bandwidth',0)/1000:.0f}Kbps). {decision_rationale_log}")
         self.broadcast_abr_decision(self.current_stream_index_by_abr)
         
     # --- 具体ABR决策逻辑实现 ---
@@ -666,12 +676,11 @@ class ABRManager:
         rationale = f"Est.BW: {estimated_bw_bps/1000:.0f} Kbps, Buf: {current_buffer_s:.2f}s, DynSF: {dynamic_safety_factor:.2f}, TargetSelBW: {target_bitrate_bps/1000:.0f} Kbps."
         self._execute_switch_decision(next_best_index, "BW_BUFFER", rationale)
         
-    
 
     def _logic_comprehensive_rules(self):
         # 步骤 0: 基本信息
         if self.num_quality_levels == 0:
-            logger.warning("ComprehensiveABR: No quality levels available.") # 日志: 无可用码率
+            logger.warning("ComprehensiveABR: No quality levels available.")
             return
         
         current_level_index = self.current_stream_index_by_abr
@@ -679,12 +688,11 @@ class ABRManager:
 
         with self._internal_lock:
             current_buffer_s = self.current_player_buffer_s
-            consecutive_errors = self.consecutive_segment_timeouts # 由 report_download_error 更新
+            consecutive_errors = self.consecutive_segment_timeouts 
             current_ewma_bps = self.ewma_bandwidth_bps 
             current_seg_url = self.current_segment_url_being_downloaded
             current_seg_start_time = self.last_segment_download_start_time
             current_seg_target_bps = self.current_segment_target_bitrate_bps
-            # current_seg_downloaded_bytes = self.current_segment_downloaded_bytes # 如能获取，可用于即时速率
 
         logger.info(
             f"ABR LOGIC (COMPREHENSIVE): InitState - EWMA_BW: {current_ewma_bps / 1000:.0f} Kbps, "
@@ -692,46 +700,55 @@ class ABRManager:
         )
 
         is_current_segment_stuck = False
+        stuck_severity = "NONE" # "MODERATE", "SEVERE"
         effective_bw_for_decision = current_ewma_bps
 
-        # --- 步骤 1: 卡顿预警 ---
+        # --- 步骤 1: 卡顿预警 (你的核心Intuition之一) ---
         if current_seg_url and current_seg_start_time > 0 and current_seg_target_bps > 0:
             time_elapsed_downloading = time.time() - current_seg_start_time
+            # ... (expected_download_time 的计算逻辑保持之前的优化版本)
             nominal_duration_s = self.NOMINAL_SEGMENT_DURATION_S
             nominal_segment_size_bits = current_seg_target_bps * nominal_duration_s
-            
             capped_ewma_for_expectation = current_ewma_bps
             expectation_ewma_cap_factor = self.COMP_PARAMS.get("expectation_ewma_cap_factor", 3.0) 
             if current_ewma_bps > current_seg_target_bps * expectation_ewma_cap_factor:
                 capped_ewma_for_expectation = current_seg_target_bps * expectation_ewma_cap_factor
-
             if capped_ewma_for_expectation > 1000:
                 expected_time_based_on_ewma = nominal_segment_size_bits / capped_ewma_for_expectation
             else:
                 fallback_factor = self.COMP_PARAMS.get("segment_stuck_fallback_duration_factor", 2.5)
                 expected_time_based_on_ewma = nominal_duration_s * fallback_factor
-
             abs_min_expected_time_s = self.COMP_PARAMS.get("abs_min_expected_time_s", 1.0)
             min_expected_time_nominal_ratio = self.COMP_PARAMS.get("min_expected_time_nominal_ratio", 0.25)
             robust_min_expected_time_s = max(abs_min_expected_time_s, nominal_duration_s * min_expected_time_nominal_ratio)
             expected_download_time = max(expected_time_based_on_ewma, robust_min_expected_time_s)
+            
+            logger.debug(f"ComprehensiveABR: StuckCheck - Seg: {current_seg_url.split('/')[-1][-25:]}, Elapsed: {time_elapsed_downloading:.2f}s, Expected: {expected_download_time:.2f}s")
 
-            logger.debug(f"ComprehensiveABR: StuckCheck - Seg: {current_seg_url}, Elapsed: {time_elapsed_downloading:.2f}s, Expected: {expected_download_time:.2f}s, TargetRate: {current_seg_target_bps/1e6:.1f}Mbps")
+            stuck_moderate_threshold = expected_download_time * self.COMP_PARAMS.get("stuck_severity_threshold_factor", 1.5)
+            stuck_severe_threshold = expected_download_time * self.COMP_PARAMS.get("stuck_severe_severity_threshold_factor", 2.5) # 比segment_stuck_timeout_factor更早触发惩罚
 
-            stuck_timeout_threshold = expected_download_time * self.COMP_PARAMS["segment_stuck_timeout_factor"]
-            if time_elapsed_downloading > stuck_timeout_threshold:
+            if time_elapsed_downloading > stuck_severe_threshold :
                 is_current_segment_stuck = True
-                logger.warning(
-                    f"ComprehensiveABR: Segment STUCK DETECTED for {current_seg_url}. "
-                    f"Elapsed: {time_elapsed_downloading:.1f}s > Expected*Factor ({expected_download_time:.2f}s * {self.COMP_PARAMS['segment_stuck_timeout_factor']})."
-                )
-                # 根据卡顿分片的目标码率和EWMA进行惩罚
-                bw_based_on_stuck_target = current_seg_target_bps * self.COMP_PARAMS.get("stuck_target_penalty_factor", 0.6)
-                bw_based_on_ewma_penalty = current_ewma_bps * self.COMP_PARAMS.get("stuck_ewma_penalty_factor", 0.4)
-                
-                effective_bw_for_decision = min(bw_based_on_stuck_target, bw_based_on_ewma_penalty)
-                effective_bw_for_decision = max(effective_bw_for_decision, self.available_streams[0]['bandwidth'] * 0.8) # 确保至少是最低码率的某个比例
-                logger.info(f"ComprehensiveABR: STUCK - Reducing effective_bw_for_decision to {effective_bw_for_decision / 1000:.0f} Kbps.")
+                stuck_severity = "SEVERE"
+                penalty_factor = self.COMP_PARAMS.get("stuck_penalty_factor_severe", 0.3)
+                logger.warning(f"ComprehensiveABR: Segment SEVERELY STUCK ({stuck_severity})!")
+                effective_bw_for_decision = current_ewma_bps * penalty_factor
+            elif time_elapsed_downloading > stuck_moderate_threshold:
+                is_current_segment_stuck = True # 标记为卡顿，但不一定是最高惩罚等级
+                stuck_severity = "MODERATE"
+                penalty_factor = self.COMP_PARAMS.get("stuck_penalty_factor_moderate", 0.6)
+                logger.warning(f"ComprehensiveABR: Segment MODERATELY STUCK ({stuck_severity}).")
+                effective_bw_for_decision = current_ewma_bps * penalty_factor
+            
+            if is_current_segment_stuck:
+                 # 进一步结合目标码率进行惩罚 (可选，通过参数控制)
+                if self.COMP_PARAMS.get("stuck_use_target_bitrate_penalty", True):
+                    bw_based_on_stuck_target = current_seg_target_bps * self.COMP_PARAMS.get("stuck_target_penalty_factor", 0.5)
+                    effective_bw_for_decision = min(effective_bw_for_decision, bw_based_on_stuck_target)
+
+                effective_bw_for_decision = max(effective_bw_for_decision, self.available_streams[0]['bandwidth'] * 0.8) # 最低保障
+                logger.info(f"ComprehensiveABR: STUCK ({stuck_severity}) - Effective BW adjusted to {effective_bw_for_decision / 1000:.0f} Kbps.")
 
         # --- 步骤 1b: 处理连续下载错误 (PANIC MODE) ---
         if consecutive_errors >= self.COMP_PARAMS.get("max_consecutive_error_for_panic", 3):
@@ -746,72 +763,79 @@ class ABRManager:
             if self.broadcast_bw_estimate and effective_bw_for_decision > 0 : # 广播可能降低的带宽
                  self.broadcast_bw_estimate(effective_bw_for_decision / 1_000_000)
             return # 紧急情况，结束本轮决策
-
+        
         if self.broadcast_bw_estimate: # 正常广播
             bw_to_broadcast = effective_bw_for_decision if effective_bw_for_decision > 0 else current_ewma_bps
             if bw_to_broadcast > 0:
                 self.broadcast_bw_estimate(bw_to_broadcast / 1_000_000)
 
-        # --- 步骤 2: 分析网络状态 ---
+         # --- 步骤 2 & 3: 分析网络状态并调整安全系数 (你的核心Intuition之一) ---
         network_features = self.get_network_analysis_features()
-        # trend: STABLE, INCREASING, DECREASING, VOLATILE, SUDDEN_DROP
-
-        # --- 步骤 3: 根据网络状态和模式调整安全系数 ---
         current_safety_factor = self.COMP_PARAMS["safety_factor_stable"]
         in_recovery_mode = time.time() < self.RECOVERY_HOLD_UNTIL_TIMESTAMP
-        active_network_state_for_sf = "STABLE" # 用于日志记录
+        
+        # --- 核心状态判断逻辑 (用于日志和决策) ---
+        # base_network_condition: 主要网络趋势判断
+        # derived_abr_state: 结合了恢复模式、卡顿等的最终ABR行动状态
+        base_network_condition = network_features['trend'] # STABLE, INCREASING, DECREASING, VOLATILE, SUDDEN_DROP
+        derived_abr_state = base_network_condition # 初始化为基础网络趋势
 
         if in_recovery_mode:
             current_safety_factor = self.COMP_PARAMS["safety_factor_recovering"]
-            active_network_state_for_sf = "RECOVERING"
-            # 如果恢复期内网络持续恶化或卡顿，可能延长恢复期
-            if network_features['trend'] == "DECREASING" or is_current_segment_stuck:
-                self.RECOVERY_HOLD_UNTIL_TIMESTAMP = time.time() + self.COMP_PARAMS["recovery_hold_duration_s"] # 延长
-                logger.info("ComprehensiveABR: Recovery extended due to continued issues.") # 日志: 因持续问题延长恢复期
-        
-        if network_features['is_sudden_drop'] and not in_recovery_mode: # 如果检测到骤降且当前不在恢复模式
-            logger.warning("ComprehensiveABR: SUDDEN_DROP detected by network_features analysis!")
-            # 如果 network_features['latest_bw_bps'] 能较快反映骤降后的值，可以考虑使用它
-            cautious_bw_after_drop = network_features['latest_bw_bps'] * self.COMP_PARAMS.get("sudden_drop_immediate_factor", 0.7)
-            effective_bw_for_decision = min(effective_bw_for_decision, cautious_bw_after_drop)
-            logger.info(f"ComprehensiveABR: SUDDEN_DROP - Further reducing effective_bw_for_decision to {effective_bw_for_decision / 1000:.0f} Kbps.")
-
-            # 确保进入恢复模式并使用骤降的安全系数
-            current_safety_factor = self.COMP_PARAMS.get("safety_factor_sudden_drop", 0.5) # 强制使用骤降安全系数
-            if not in_recovery_mode: # 避免重复设置恢复期，除非是新的骤降事件
-                self.RECOVERY_HOLD_UNTIL_TIMESTAMP = time.time() + self.COMP_PARAMS.get("suddendrop_recovery_duration_s", self.COMP_PARAMS["recovery_hold_duration_s"]) # 可以用更长的恢复期
-                in_recovery_mode = True
-            active_network_state_for_sf = "SUDDEN_DROP_CONFIRMED"
-            logger.info(f"ComprehensiveABR: SUDDEN_DROP - SF set to {current_safety_factor}, Recovery active/extended.")
+            derived_abr_state = f"RECOVERING (from {base_network_condition})" # 更具体的恢复状态
+            if network_features['is_sudden_drop'] or (is_current_segment_stuck and base_network_condition == "DECREASING"): # 恢复期内再次恶化
+                self.RECOVERY_HOLD_UNTIL_TIMESTAMP = time.time() + self.COMP_PARAMS["recovery_hold_duration_s"] # 延长恢复期
+                derived_abr_state += "+EXTENDED"
+        elif network_features['is_sudden_drop']:
+            current_safety_factor = self.COMP_PARAMS.get("safety_factor_sudden_drop", 0.5)
+            # 强制将有效带宽拉向最新样本（如果骤降被检测到，最新样本通常较低）
+            if network_features['latest_bw_bps'] > 0 and network_features['latest_bw_bps'] < effective_bw_for_decision :
+                effective_bw_for_decision = min(effective_bw_for_decision, network_features['latest_bw_bps'] * self.COMP_PARAMS.get("suddendrop_ewma_discount_factor",0.8)) # 使用最新样本打折
+            self.RECOVERY_HOLD_UNTIL_TIMESTAMP = time.time() + self.COMP_PARAMS.get("suddendrop_recovery_duration_s", self.COMP_PARAMS["recovery_hold_duration_s"] * 1.5) # 骤降恢复期可能更长
+            in_recovery_mode = True
+            derived_abr_state = "SUDDEN_DROP_TRIGGERED_RECOVERY"
         elif network_features['is_volatile']:
             current_safety_factor = self.COMP_PARAMS["safety_factor_volatile"]
-            active_network_state_for_sf = "VOLATILE"
-        elif network_features['trend'] == "DECREASING":
-            current_safety_factor = self.COMP_PARAMS.get("safety_factor_decreasing", self.COMP_PARAMS["safety_factor_volatile"]) # 若无特定decreasing，则用volatile的
-            active_network_state_for_sf = "DECREASING"
-        elif network_features['trend'] == "INCREASING":
+            derived_abr_state = "VOLATILE"
+        elif base_network_condition == "DECREASING":
+            current_safety_factor = self.COMP_PARAMS.get("safety_factor_decreasing", 0.7)
+            derived_abr_state = "DECREASING"
+        elif base_network_condition == "INCREASING":
             current_safety_factor = self.COMP_PARAMS.get("safety_factor_increasing", 0.9)
-            active_network_state_for_sf = "INCREASING"
+            derived_abr_state = "INCREASING"
         
-        if is_current_segment_stuck and not in_recovery_mode : # 如果不在恢复模式，但当前卡顿了
-             # 应用更保守的安全系数，但不覆盖因SUDDEN_DROP已进入的更严格的恢复模式安全系数
-            current_safety_factor = min(current_safety_factor, self.COMP_PARAMS["safety_factor_recovering"]) 
-            active_network_state_for_sf += "+STUCK" # 附加状态
-            logger.info(f"ComprehensiveABR: Segment STUCK, applying conservative SF: {current_safety_factor:.2f}")
+        if is_current_segment_stuck: # 如果当前分片卡住，这是一个强烈的信号
+            # 即使不在恢复模式，卡顿也应该导致更保守的行为
+            current_safety_factor = min(current_safety_factor, self.COMP_PARAMS.get("safety_factor_stuck_segment", self.COMP_PARAMS["safety_factor_recovering"])) # 新参数或用恢复期SF
+            if derived_abr_state == base_network_condition : # 如果状态未被其他条件改变
+                derived_abr_state = f"{base_network_condition}+STUCK({stuck_severity})"
+            else: # 如果状态已被改变 (例如 RECOVERING)，附加STUCK信息
+                derived_abr_state += f"+STUCK({stuck_severity})"
         
         target_selectable_bps = effective_bw_for_decision * current_safety_factor
-        logger.info(f"ComprehensiveABR: State for decision - EffBW: {effective_bw_for_decision/1e6:.2f}Mbps, SF({active_network_state_for_sf}): {current_safety_factor:.2f}, TargetSelBW: {target_selectable_bps/1e6:.2f}Mbps, Trend: {network_features['trend']}, Buffer: {current_buffer_s:.1f}s, Recovery: {in_recovery_mode}")
+        
+        # --- 清晰打印ABR的状态判断 ---
+        logger.info(f"ComprehensiveABR: State for decision - "
+                    f"EffectiveBW: {effective_bw_for_decision/1e6:.2f}Mbps, "
+                    f"SafetyFactor({derived_abr_state}): {current_safety_factor:.2f}, "
+                    f"TargetSelectableBW: {target_selectable_bps/1e6:.2f}Mbps, "
+                    f"Buffer: {current_buffer_s:.1f}s, "
+                    f"StuckSeverity: {stuck_severity}, "
+                    f"InRecoveryMode: {in_recovery_mode}")
 
         # --- 步骤 4: 基于带宽、缓冲区和网络状态的码率选择 ---
         
-        # 紧急情况：缓冲区过低（这个优先级最高）
+        # 紧急缓冲判断 (最高优先级)
         if current_buffer_s < self.COMP_PARAMS["buffer_emergency_threshold"] and current_level_index > 0:
             next_best_index = 0 
-            logger.warning(f"ComprehensiveABR: EMERGENCY BUFFER ({current_buffer_s:.2f}s). Target level 0.")
+            logger.warning(f"ComprehensiveABR: EMERGENCY BUFFER ({current_buffer_s:.2f}s). Targeting level 0.")
+            # 允许紧急降级覆盖部分切换抑制（在 _execute_switch_decision 中实现）
+            # 这里传递一个特殊理由
+            rationale_for_emergency = f"EMERGENCY BUFFER ({current_buffer_s:.2f}s)"
         
         # 恢复模式下的逻辑 (如果上面紧急缓冲没触发)
         elif in_recovery_mode:
-            logger.info("ComprehensiveABR: In RECOVERY MODE logic.")
+            logger.info(f"ComprehensiveABR: In RECOVERY MODE ({derived_abr_state}).")
             # 降级：如果当前码率都无法维持
             if target_selectable_bps < self.available_streams[current_level_index]['bandwidth'] * 0.95 and current_level_index > 0: # 恢复期对维持当前也要求高一点
                 temp_idx = 0
@@ -836,16 +860,16 @@ class ABRManager:
 
         # 正常模式下的升降档逻辑
         else:
-            # --- 升档逻辑 (结合你的Intuition第二点：动态判断缓冲区) ---
-            can_consider_upgrade = (network_features['trend'] in ["STABLE", "INCREASING"] and \
-                                   not is_current_segment_stuck and \
-                                   current_buffer_s > self.COMP_PARAMS["buffer_high_for_upgrade"] and \
+            # --- 升档逻辑 (强化缓冲区动态判断) ---
+            can_consider_upgrade = (derived_abr_state in ["STABLE", "INCREASING"] and # 只有在稳定或上升趋势时
+                                   not is_current_segment_stuck and # 当前没有卡顿
+                                   current_buffer_s > self.COMP_PARAMS["buffer_high_for_upgrade"] and
                                    current_level_index < (self.num_quality_levels - 1))
-
+            
             if can_consider_upgrade:
-                logger.info(f"ComprehensiveABR: NORMAL - Considering UPGRADE from level {current_level_index}.")
+                logger.info(f"ComprehensiveABR: NORMAL ({derived_abr_state}) - Considering UPGRADE from level {current_level_index}.")
                 potential_upgrade_idx = current_level_index
-                # 找到带宽能支持的最高潜在升级级别
+                # ... (寻找 potential_upgrade_idx 的逻辑保持不变) ...
                 for i in range(self.num_quality_levels - 1, current_level_index, -1):
                     required_bw_for_this_level = self.available_streams[i]['bandwidth'] * self.COMP_PARAMS.get("normal_upgrade_selection_margin", 1.05)
                     if target_selectable_bps >= required_bw_for_this_level:
@@ -853,54 +877,48 @@ class ABRManager:
                         break
                 
                 if potential_upgrade_idx > current_level_index:
-                    # 候选升级级别已找到，现在进行详细的缓冲区可持续性检查
                     new_level_bitrate_bps = self.available_streams[potential_upgrade_idx]['bandwidth']
-                    
-                    # 检查1: 带宽余量是否充足
-                    has_enough_headroom = effective_bw_for_decision >= new_level_bitrate_bps * (1 + self.COMP_PARAMS.get("normal_upgrade_sustain_headroom", 0.15))
-                    
-                    # 检查2: 如果带宽余量不足，是否拥有超高缓冲
-                    buffer_is_very_high_for_risky_upgrade = current_buffer_s > self.COMP_PARAMS.get("buffer_needed_for_low_headroom_upgrade", 30.0)
+                    # --- 详细的缓冲区可持续性检查 ---
+                    # 假设切换会“消耗”或“清空”一部分当前缓冲的感知价值
+                    # 例如，固定损失几秒，或者当前缓冲的一小部分，取更保守者
+                    buffer_lost_on_switch_estimate_s = max(
+                        self.COMP_PARAMS.get("buffer_fixed_loss_on_upgrade_s", 2.0),
+                        current_buffer_s * self.COMP_PARAMS.get("buffer_percent_loss_on_upgrade_ratio", 0.1)
+                    )
+                    # 更为激进的假设是完全清空与新旧码率无关的缓冲部分，只保留能用于新码率的部分，但这个很难量化
+                    # 简单处理：假设切换后，我们能依赖的有效缓冲起点更低
+                    effective_buffer_for_projection_s = max(0, current_buffer_s - buffer_lost_on_switch_estimate_s)
 
-                    # 检查3: 预估切换一个分片（考虑到可能的缓冲部分清空）后的缓冲区情况
-                    # 假设切换会损失一部分当前缓冲，例如损失2秒或者当前缓冲的10% (取保守值)
-                    buffer_loss_on_switch_s = min(2.0, current_buffer_s * 0.1) 
-                    effective_buffer_after_potential_clear = current_buffer_s - buffer_loss_on_switch_s
+                    # 预估播放一个新码率分片后，缓冲区的变化 (秒)
+                    # 变化量 = D_nom * (下载能力 / 消耗速率 - 1)
+                    # 下载能力用 effective_bw_for_decision (它已乘以安全系数)
+                    # 消耗速率是 new_level_bitrate_bps
+                    buffer_change_per_segment_s = self.NOMINAL_SEGMENT_DURATION_S * (effective_bw_for_decision / new_level_bitrate_bps - 1)
                     
-                    # 在此有效缓冲基础上，播放一个新码率分片后的预估缓冲
-                    # 变化量 (秒) = 标准分片时长 * (下载速率 / 消耗速率 - 1)
-                    # 这里用 effective_bw_for_decision 代表下载能力，new_level_bitrate_bps 代表消耗速率
-                    projected_buffer_after_one_segment = effective_buffer_after_potential_clear + \
-                        self.NOMINAL_SEGMENT_DURATION_S * (effective_bw_for_decision / new_level_bitrate_bps - 1)
-
-                    min_buffer_needed_after_segment = self.COMP_PARAMS.get("buffer_min_after_potential_clear_on_upgrade", self.COMP_PARAMS["buffer_low_threshold"] * 0.8)
+                    projected_buffer_after_one_segment = effective_buffer_for_projection_s + buffer_change_per_segment_s
+                    
+                    # 升级后缓冲区必须满足的最低要求
+                    min_buffer_after_upgrade_segment = self.COMP_PARAMS.get("buffer_min_after_upgrade_segment_s", self.COMP_PARAMS["buffer_low_threshold"])
 
                     logger.info(f"ComprehensiveABR: UPGRADE CHECK to Lvl {potential_upgrade_idx} (Rate:{new_level_bitrate_bps/1e6:.1f}M) - "
-                                f"HasHeadroom: {has_enough_headroom} (EffBW:{effective_bw_for_decision/1e6:.1f}M vs Need:{new_level_bitrate_bps*(1+self.COMP_PARAMS.get('normal_upgrade_sustain_headroom',0.15))/1e6:.1f}M). "
-                                f"BufferVeryHigh: {buffer_is_very_high_for_risky_upgrade} (Cur:{current_buffer_s:.1f}s vs Need:{self.COMP_PARAMS.get('buffer_needed_for_low_headroom_upgrade',30.0):.1f}s). "
-                                f"EffectiveBufferAfterClear: {effective_buffer_after_potential_clear:.1f}s. "
-                                f"ProjectedBufferAfterSegment: {projected_buffer_after_one_segment:.1f}s (Need > {min_buffer_needed_after_segment:.1f}s).")
+                                f"CurrentBuffer: {current_buffer_s:.1f}s, Est.LossOnSwitch: {buffer_lost_on_switch_estimate_s:.1f}s, EffectiveBufferForProj: {effective_buffer_for_projection_s:.1f}s. "
+                                f"ProjectedBufferChangePerSegment: {buffer_change_per_segment_s:.1f}s. "
+                                f"ProjectedBufferAfterOneSegment: {projected_buffer_after_one_segment:.1f}s (Need > {min_buffer_after_upgrade_segment:.1f}s).")
 
-                    upgrade_approved = False
-                    if has_enough_headroom: # 如果带宽余量充足
-                        if projected_buffer_after_one_segment >= min_buffer_needed_after_segment:
-                            upgrade_approved = True
-                            logger.info("ComprehensiveABR: UPGRADE approved (good headroom and projected buffer).")
+                    if projected_buffer_after_one_segment >= min_buffer_after_upgrade_segment:
+                        # 进一步检查带宽余量是否足够（即使target_selectable_bps通过了初步筛选）
+                        if effective_bw_for_decision >= new_level_bitrate_bps * (1 + self.COMP_PARAMS.get("normal_upgrade_sustain_headroom", 0.15)):
+                            next_best_index = potential_upgrade_idx
+                            logger.info("ComprehensiveABR: UPGRADE approved (good headroom and projected buffer OK).")
+                        elif effective_buffer_for_projection_s > self.COMP_PARAMS.get("buffer_needed_for_low_headroom_upgrade", 30.0) : # 如果带宽余量不足，但有效缓冲非常高
+                            next_best_index = potential_upgrade_idx
+                            logger.info("ComprehensiveABR: UPGRADE approved (low headroom but very high effective buffer and projected buffer OK).")
                         else:
-                            logger.warning("ComprehensiveABR: UPGRADE REJECTED (good headroom but projected buffer too low after segment).")
-                    elif buffer_is_very_high_for_risky_upgrade: # 带宽余量不足，但有超高缓冲
-                        if projected_buffer_after_one_segment >= min_buffer_needed_after_segment:
-                            upgrade_approved = True
-                            logger.info("ComprehensiveABR: UPGRADE approved (low headroom but very high buffer and projected buffer OK).")
-                        else:
-                            logger.warning("ComprehensiveABR: UPGRADE REJECTED (low headroom, very high buffer but projected buffer still too low).")
-                    else: # 带宽余量不足，缓冲也不是超高
-                        logger.warning("ComprehensiveABR: UPGRADE REJECTED (low headroom and buffer not high enough for risky upgrade).")
-
-                    if upgrade_approved:
-                        next_best_index = potential_upgrade_idx
-                else: # target_selectable_bps 不足以选择任何比当前高的码率（即使缓冲区很高）
-                    logger.info("ComprehensiveABR: NORMAL - High buffer but target_selectable_bps not enough for any quality upgrade margin.")
+                            logger.warning("ComprehensiveABR: UPGRADE REJECTED (projected buffer OK, but insufficient headroom and effective buffer not high enough for risk).")
+                    else:
+                        logger.warning("ComprehensiveABR: UPGRADE REJECTED (projected buffer after one segment too low).")
+                else:
+                    logger.info("ComprehensiveABR: NORMAL - High buffer but target_selectable_bps not sufficient for any quality upgrade.")
             
             # --- 降档逻辑 (如果未触发升级或不满足升级条件) ---
             # (确保 next_best_index 仍然是 current_level_index，即尚未因升级而改变)
@@ -933,10 +951,14 @@ class ABRManager:
 
         # --- 步骤 5: 应用决策 ---
         rationale = (f"EffBW: {effective_bw_for_decision/1e6:.2f}M, TargetSelBW: {target_selectable_bps/1e6:.2f}M, "
-                     f"Buf: {current_buffer_s:.1f}s, NetState({active_network_state_for_sf})/Trend({network_features['trend']}), SF: {current_safety_factor:.2f}, "
-                     f"ConsErr: {consecutive_errors}, Stuck: {is_current_segment_stuck}, Recovery: {in_recovery_mode}")
+                     f"Buf: {current_buffer_s:.1f}s, ABRState: {derived_abr_state}, SF: {current_safety_factor:.2f}, "
+                     f"ConsErr: {consecutive_errors}, Stuck: {stuck_severity}, Recovery: {in_recovery_mode}")
         
-        self._execute_switch_decision(next_best_index, "COMPREHENSIVE", rationale)
+        # 考虑是否因为紧急情况而覆盖切换抑制
+        is_emergency_decision = (next_best_index == 0 and current_buffer_s < self.COMP_PARAMS["buffer_emergency_threshold"])
+        
+        self._execute_switch_decision(next_best_index, "COMPREHENSIVE", rationale, is_emergency=is_emergency_decision)
+
 
 
     def abr_loop(self): # 与之前类似，只是日志中加入了logic_type

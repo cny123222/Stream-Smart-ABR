@@ -687,7 +687,7 @@ def main():
     logger.info("Client setup complete. Press Ctrl+C to stop.")
     
     start_time = time.time()
-    RUNTIME_SECONDS = 3000 # 设置期望的运行时间
+    RUNTIME_SECONDS = 40 # 设置期望的运行时间
     
     try:
         while not shutdown_requested:
