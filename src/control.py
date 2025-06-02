@@ -6,7 +6,7 @@ import ctypes
 # 定义不同的参数组合
 parameter_combinations = [
     # e.g. [3,1] # [决策, 网络环境]
-    [2, 8]
+    [2, 9]
 ]
 
 for i in range(1, 4):

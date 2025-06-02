@@ -259,6 +259,7 @@
                             console.warn(`Python ABR COMMAND: Invalid levelIndex ${newLevelIndex} or hlsInstance.levels not ready.`);
                         }
                     } else if (message.type === "NETWORK_SIM_UPDATE") { //
+                        console.log("Handling NETWORK_SIM_UPDATE with data:", message.data);
                         if (networkSimStatusSpan) { // 安全检查
                             if (message.data && typeof message.data.bandwidth_Mbps === 'number') {
                                 networkSimStatusSpan.textContent = `${message.data.bandwidth_Mbps.toFixed(2)} Mbps`;
@@ -268,7 +269,8 @@
                                 networkSimStatusSpan.textContent = "N/A";
                             }
                         }
-                    } else if (message.type === "ABR_BW_ESTIMATE_UPDATE") { // 新增：处理Python ABR估算的带宽更新
+                    } else if (message.type === "ABR_BW_ESTIMATE_UPDATE") {
+                        console.log("Handling ABR_BW_ESTIMATE_UPDATE with data:", message.data);
                         if (estimatedAbrBwSpan && message.data && typeof message.data.estimated_Mbps === 'number') { // 安全检查
                             estimatedAbrBwSpan.textContent = `${message.data.estimated_Mbps.toFixed(2)} Mbps`;
                         } else if (estimatedAbrBwSpan) {
@@ -293,35 +295,41 @@
                 return originalVideoPlay.apply(this, args);
             };
 
-            video.addEventListener('playing', function() { //
+            video.addEventListener('playing', function() {
                 const currentEventTime = Date.now();
-                if (isFirstPlaySignal && playInitiatedTimestamp > 0) {
-                    const startupLatency = currentEventTime - playInitiatedTimestamp;
-                    console.log(`QoE JS: Startup Latency = ${startupLatency} ms`);
-                    sendQoeEvent({ event: "STARTUP_LATENCY", value: startupLatency, timestamp: currentEventTime });
-                    startupLatencySpan.textContent = `${startupLatency} ms`;
-                    isFirstPlaySignal = false;
-                }
+                console.log("PLAYING event fired. isRebuffering (before):", isRebuffering, "isFirstPlaySignal:", isFirstPlaySignal);
                 if (isRebuffering) {
                     isRebuffering = false;
                     const rebufferingDuration = currentEventTime - rebufferingStartTime;
                     totalRebufferingDurationMs += rebufferingDuration;
-                    console.log(`QoE JS: Rebuffering ended. Duration = ${rebufferingDuration} ms`);
+                    console.log("Rebuffering ended. Duration:", rebufferingDuration, "totalRebufferingDurationMs:", totalRebufferingDurationMs);
                     sendQoeEvent({ event: "REBUFFERING_END", duration: rebufferingDuration, timestamp: currentEventTime });
-                    rebufferingDurationSpan.textContent = `${totalRebufferingDurationMs} ms`;
+                    if(rebufferingDurationSpan) rebufferingDurationSpan.textContent = `${totalRebufferingDurationMs} ms`; // 确保 rebufferingDurationSpan 有效
                 }
             });
 
-            video.addEventListener('waiting', function() { //
+            video.addEventListener('waiting', function() {
                 const currentEventTime = Date.now();
-                if (!isFirstPlaySignal && video.currentTime > 0 && !video.paused && !video.ended) {
+                console.log("WAITING event fired. isFirstPlaySignal:", isFirstPlaySignal, 
+                            "video.currentTime:", video.currentTime, 
+                            "video.paused:", video.paused, 
+                            "video.ended:", video.ended,
+                            "isRebuffering (before):", isRebuffering);
+                if (isFirstPlaySignal && playInitiatedTimestamp > 0) {
+                    const startupLatency = currentEventTime - playInitiatedTimestamp;
+                    console.log(`QoE JS: Startup Latency = ${startupLatency} ms`);
+                    sendQoeEvent({ event: "STARTUP_LATENCY", value: startupLatency, timestamp: currentEventTime });
+                    <!-- startupLatencySpan.textContent = `${startupLatency} ms`; -->
+                    isFirstPlaySignal = false;
+                }
+                if (!isFirstPlaySignal && video.currentTime > 0 && !video.paused && !video.ended) { 
                     if (!isRebuffering) {
                         isRebuffering = true;
                         rebufferingStartTime = currentEventTime;
                         totalRebufferingEvents++;
-                        console.log("QoE JS: Rebuffering started");
+                        console.log("Rebuffering started. totalRebufferingEvents:", totalRebufferingEvents, "rebufferingStartTime:", rebufferingStartTime); // 修改这行
                         sendQoeEvent({ event: "REBUFFERING_START", timestamp: rebufferingStartTime });
-                        rebufferingCountSpan.textContent = `${totalRebufferingEvents} events`;
+                        if(rebufferingCountSpan) rebufferingCountSpan.textContent = `${totalRebufferingEvents} events`; // 确保 rebufferingCountSpan 有效
                     }
                 }
             });
@@ -372,7 +380,9 @@
                         
                         // Update UI for initial quality
                         if (hlsInstance.levels[jsPreviousLevel]) {
-                             currentQualitySpan.textContent = `${hlsInstance.levels[jsPreviousLevel].height}p @ ${(hlsInstance.levels[jsPreviousLevel].bitrate / 1000).toFixed(0)} kbps`;
+                            const initialQualityText = `${hlsInstance.levels[jsPreviousLevel].height}p @ ${(hlsInstance.levels[jsPreviousLevel].bitrate / 1000).toFixed(0)} kbps`;
+                            if (displayedQualitySpan) displayedQualitySpan.textContent = initialQualityText;
+                            if (loadedQualitySpan) loadedQualitySpan.textContent = initialQualityText;
                         }
                         
                         // Send initial level to Python QoE
