@@ -412,8 +412,8 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                         self.wfile.flush()
                         _t_actual_send_end = time.time()
                         effective_segment_download_duration_for_abr = _t_actual_send_end - _t_actual_send_start
-                        if effective_segment_download_duration_for_abr < 0.001: # 避免零或太小的值
-                            effective_segment_download_duration_for_abr = 0.001
+                        if effective_segment_download_duration_for_abr < 1e-5: # 避免零或太小的值
+                            effective_segment_download_duration_for_abr = 1e-5
                 
                 except socket.error as e_sock: # 在self.wfile.write期间捕获套接字错误（无论是否限流）
                     logger.warning(f"{request_log_tag} Socket error sending segment {segment_filename_for_log} to hls.js: {e_sock}")
@@ -573,11 +573,17 @@ def main():
         selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
         # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
         if abr_decision == 1:
-            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
+            selected_logic = ABRManager.LOGIC_TYPE_SLBW
         elif abr_decision == 2:
-            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+            selected_logic = ABRManager.LOGIC_TYPE_SWMA
         elif abr_decision == 3:
+            selected_logic = ABRManager.LOGIC_TYPE_EWMA
+        elif abr_decision == 4:
             selected_logic = ABRManager.LOGIC_TYPE_BUFFER_ONLY
+        elif abr_decision == 5:
+            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+        elif abr_decision == 6:
+            selected_logic = ABRManager.LOGIC_TYPE_COMPREHENSIVE
         else:
             logger.error("Invalid ABR decision. Using default logic.")
             selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
