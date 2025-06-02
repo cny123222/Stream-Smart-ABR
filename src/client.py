@@ -110,6 +110,9 @@ async def handle_websocket_client(websocket):
                     elif event_name == "REBUFFERING_START":
                         REBUFFERING = True
                         qoe_manager.record_rebuffering_start(timestamp)
+                        if ABRManager.instance and hasattr(ABRManager.instance, 'notify_rebuffering_event'):
+                            ABRManager.instance.notify_rebuffering_event(timestamp) # 传递毫秒时间戳
+                            logger.info(f"Notified ABRManager of REBUFFERING_START event at {timestamp}.") # 日志: 通知ABR卡顿开始
                     elif event_name == "REBUFFERING_END":
                         REBUFFERING = False
                         qoe_manager.record_rebuffering_end(timestamp)
@@ -372,6 +375,24 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                 data_size_bytes = 0 # 初始化
 
                 try:
+                    # 在实际获取分片前，通知 ABRManager 
+                    if ABRManager.instance and hasattr(ABRManager.instance, 'notify_segment_download_started'):
+                        target_level_idx = self._get_level_index_from_ts_url(original_ts_url_on_server)
+
+                        if target_level_idx is not None:
+                            # 注意：这里不再需要预估分片大小，ABRManager会根据level_idx和标准时长估算
+                            ABRManager.instance.notify_segment_download_started(
+                                segment_url=original_ts_url_on_server,
+                                target_level_idx=target_level_idx
+                                # current_bw_estimate_bps 参数已从 notify_segment_download_started 移除
+                                # ABRManager内部会使用它自己的最新带宽估计
+                            )
+                        else:
+                            logger.warning(f"Could not determine target level for {segment_filename_for_log} to notify ABR pre-download. "
+                                        "ABR pre-emptive logic might be affected.") # 日志: 无法确定目标级别
+                            # 也可以选择用一个默认值（比如-1表示未知）来调用，让ABRManager内部处理
+                            # ABRManager.instance.notify_segment_download_started(original_ts_url_on_server, -1)
+
                     # 步骤1：从源获取分片
                     # fetch_start_time = time.time() # 如果ABR依赖代理->客户端时间则不严格需要
                     response_ts = requests.get(original_ts_url_on_server, timeout=SOCKET_TIMEOUT_SECONDS, stream=False)
@@ -480,6 +501,61 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
             else: modified_lines.append(line)
         return "\n".join(modified_lines)
     def log_message(self, format, *args): logger.debug(f"ProxyHTTP: {self.address_string()} - {args[0]} {args[1]}")
+    
+    def _get_level_index_from_ts_url(self, ts_url_on_server: str) -> int | None:
+        """
+        尝试从TS分片的URL推断其所属的码率等级索引。
+        此方法依赖于 ABRManager 的 available_streams 列表中每个流信息 (stream_info)
+        包含一个 'suffix' 键 (例如 '480p-1500k')，这个suffix唯一标识了该码率等级，
+        并且该suffix也作为特征字符串出现在对应TS分片的URL的路径部分中（通常是作为目录名）。
+
+        参数:
+            ts_url_on_server (str): 从源服务器获取的TS分片的完整URL。
+
+        返回:
+            int: 如果成功匹配到，则返回对应的码率等级索引。
+            None: 如果无法从URL中确定码率等级索引。
+        """
+        if not (ABRManager.instance and ABRManager.instance.available_streams):
+            logger.warning("ABRManager instance or available_streams not available for URL to level index mapping.") # 日志: ABR管理器或流不可用
+            return None
+
+        # TS URL 的格式通常是: http://<host>/<video_name>/<quality_suffix_dir>/<segment_name>.ts
+        # 我们需要从 ts_url_on_server 中提取出 <quality_suffix_dir> 这部分。
+        try:
+            parsed_ts_path = urlparse(ts_url_on_server).path # 获取路径部分，例如 /bbb_sunflower/2160p-16000k/...
+            path_segments = parsed_ts_path.strip('/').split('/')
+            
+            # 假设 <quality_suffix_dir> 是倒数第二个路径组件 (在分片文件名前面)
+            # 例如，对于 "bbb_sunflower/2160p-16000k/segment.ts", 它是 "2160p-16000k"
+            # 对于 "video/2160p-16000k/seg.ts", 它是 "2160p-16000k"
+            # 你需要根据你的实际URL结构调整这里的索引。
+            # 如果你的 VIDEO_TO_STREAM_NAME 也可能变化，那么这个索引可能需要更动态地确定。
+            # 假设视频名是固定的，或者路径结构是 /VIDEO_NAME/SUFFIX/segment.ts
+            if len(path_segments) >= 3: # 至少需要 video_name/suffix/segment.ts
+                url_suffix_part = path_segments[-2] # 取倒数第二个作为质量目录的suffix
+                
+                for i, stream_info in enumerate(ABRManager.instance.available_streams):
+                    quality_suffix_from_abr_config = stream_info.get('suffix')
+                    if quality_suffix_from_abr_config and quality_suffix_from_abr_config == url_suffix_part:
+                        logger.debug(f"Matched TS URL '{ts_url_on_server}' to level {i} using path component '{url_suffix_part}'.") # 日志: 通过路径组件匹配到级别
+                        return i
+                # 如果直接比较目录名没有成功，再尝试一次更宽松的 'in' 检查 (作为后备)
+                # 这在你之前的代码中有，但如果 suffix 是目录名，直接等于会更精确
+                for i, stream_info in enumerate(ABRManager.instance.available_streams):
+                    quality_suffix_from_abr_config = stream_info.get('suffix')
+                    if quality_suffix_from_abr_config and quality_suffix_from_abr_config in ts_url_on_server: # 后备检查
+                         logger.debug(f"Matched TS URL '{ts_url_on_server}' to level {i} using substring suffix '{quality_suffix_from_abr_config}'.") # 日志: 通过子串后缀匹配到级别
+                         return i
+
+            else:
+                logger.warning(f"TS URL path '{parsed_ts_path}' does not have enough segments to extract quality suffix directory.") # 日志: TS URL路径段不足
+
+        except Exception as e_parse:
+            logger.error(f"Error parsing TS URL '{ts_url_on_server}' for level index: {e_parse}", exc_info=True) # 日志: 解析TS URL出错
+
+        logger.warning(f"Could not determine level index from TS URL: {ts_url_on_server} using suffix matching or path component.") # 日志: 无法从TS URL确定级别索引
+        return None
 
 class ThreadingLocalProxyServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
@@ -614,7 +690,7 @@ def main():
     logger.info("Client setup complete. Press Ctrl+C to stop.")
     
     start_time = time.time()
-    RUNTIME_SECONDS = 30 # 设置期望的运行时间
+    RUNTIME_SECONDS = 40 # 设置期望的运行时间
     
     try:
         while not shutdown_requested:
