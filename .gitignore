@@ -195,3 +195,6 @@ tmp.py
 temp.py
 src/tmp.py
 src/temp.py
+
+# Checkpoint files
+*.pth
