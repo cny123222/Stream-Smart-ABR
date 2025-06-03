@@ -23,8 +23,8 @@ parameter_combinations = [
 ]
 
 # 生成参数组合 (决策逻辑 1-7, 网络环境 1-9)
-# for i in range(1, 8):
-#     for j in range(9, 10):
+# for i in [6]:
+#     for j in range(1, 10):
 #         parameter_combinations.append([i, j])
 
 # 用于跟踪当前正在运行的子进程
