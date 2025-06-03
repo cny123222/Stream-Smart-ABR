@@ -19,13 +19,13 @@ if not logger.handlers: # 防止重复添加处理器
 # 定义不同的参数组合
 parameter_combinations = [
     # 例如: [决策逻辑类型, 网络环境场景]
-    [7, 3]
+    [6, 9]
 ]
 
-# 生成参数组合 (决策逻辑 1-3, 网络环境 1-8)
-for i in range(1, 7):
-    for j in range(3, 4):
-        parameter_combinations.append([i, j])
+# 生成参数组合 (决策逻辑 1-7, 网络环境 1-9)
+# for i in range(1, 8):
+#     for j in range(9, 10):
+#         parameter_combinations.append([i, j])
 
 # 用于跟踪当前正在运行的子进程
 current_process = None
@@ -95,12 +95,12 @@ try:
             # Popen.wait() 会等待子进程结束。
             # 此处的超时（例如45秒）是为了测试脚本本身的健壮性，
             # 以防 client.py 内部逻辑卡死导致无法自行退出。
-            current_process.wait(timeout=45) 
+            current_process.wait(timeout=120) 
             logger.info(f"client.py (PID: {current_process.pid}) for parameters {params} has finished its run.") # 日志英文
         
         except subprocess.TimeoutExpired:
             # 如果 client.py 超过了此脚本设置的外部超时（例如45秒）仍未退出
-            logger.warning(f"External timeout (45s) reached for client.py (PID: {current_process.pid}). " 
+            logger.warning(f"External timeout (120s) reached for client.py (PID: {current_process.pid}). " 
                            f"This is unexpected if client.py has a 30s internal exit. Terminating...") # 日志英文
             cleanup_process_gracefully(current_process)
         

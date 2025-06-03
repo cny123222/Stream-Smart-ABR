@@ -98,22 +98,20 @@ async def handle_websocket_client(websocket):
                     # print('--------------  ', event_data, ' -----------awawa')
                     event_name = event_data.get("event")
                     if event_data.get("value") is not None and event_data.get("value") < 1.0 and not REBUFFERING:
-                        REBUFFERING = True
                         event_name = "REBUFFERING_START"
                     elif event_data.get("value") is not None and event_data.get("value") >= 1.0 and REBUFFERING:
-                        REBUFFERING = False
                         event_name = "REBUFFERING_END"
                     timestamp = event_data.get("timestamp", time.time() * 1000)
 
                     if event_name == "STARTUP_LATENCY":
                         qoe_manager.record_startup_latency(event_data.get("value"), timestamp)
-                    elif event_name == "REBUFFERING_START":
+                    elif event_name == "REBUFFERING_START" and not REBUFFERING:
                         REBUFFERING = True
                         qoe_manager.record_rebuffering_start(timestamp)
                         if ABRManager.instance and hasattr(ABRManager.instance, 'notify_rebuffering_event'):
                             ABRManager.instance.notify_rebuffering_event(timestamp) # 传递毫秒时间戳
                             logger.info(f"Notified ABRManager of REBUFFERING_START event at {timestamp}.") # 日志: 通知ABR卡顿开始
-                    elif event_name == "REBUFFERING_END":
+                    elif event_name == "REBUFFERING_END" and REBUFFERING:
                         REBUFFERING = False
                         qoe_manager.record_rebuffering_end(timestamp)
                     elif event_name == "QUALITY_SWITCH":
@@ -285,6 +283,21 @@ def schedule_network_sim_status_broadcast(status_data):
         asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
     else:
         logger.warning("Cannot schedule Network Sim Status broadcast: WebSocket asyncio loop not available or not running.")
+        
+def schedule_network_state_broadcast(network_features_dict): # network_features_dict 就是 get_network_analysis_features 返回的字典
+    if g_asyncio_loop_for_websocket and g_asyncio_loop_for_websocket.is_running():
+        # 只挑选部分关键信息发送，避免消息过大
+        data_to_send = {
+            "trend": network_features_dict.get("trend", "UNKNOWN"),
+            "is_volatile": network_features_dict.get("is_volatile", False),
+            "is_sudden_drop": network_features_dict.get("is_sudden_drop", False),
+            "coeff_variation": f"{network_features_dict.get('coeff_variation', 0.0):.2f}",
+            # 你可以按需添加其他特征
+        }
+        message = json.dumps({"type": "ABR_NETWORK_STATE_UPDATE", "data": data_to_send})
+        asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
+    else:
+        logger.warning("Cannot schedule ABR Network State broadcast: WebSocket asyncio loop not available.")
 
 class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
     # 确保_rewrite_master_playlist向HLS.js提供所有变体
@@ -671,6 +684,7 @@ def main():
             available_streams,
             broadcast_abr_decision_callback=schedule_abr_broadcast,
             broadcast_bw_estimate_callback=schedule_abr_bw_estimate_broadcast,
+            broadcast_network_state_callback=schedule_network_state_broadcast,
             logic_type=selected_logic
         )
         abr_manager_instance.start()
@@ -690,7 +704,7 @@ def main():
     logger.info("Client setup complete. Press Ctrl+C to stop.")
     
     start_time = time.time()
-    RUNTIME_SECONDS = 40 # 设置期望的运行时间
+    RUNTIME_SECONDS = 100 # 设置期望的运行时间
     
     try:
         while not shutdown_requested:

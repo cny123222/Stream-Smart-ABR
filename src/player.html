@@ -179,6 +179,7 @@
                 <p><span class="label">Current Segment:</span> <span id="currentSegmentSpan" class="value">-</span></p>
                 <p><span class="label">Displayed Quality:</span> <span id="displayedQualitySpan" class="value">-</span></p>
                 <p><span class="label">Loading Quality:</span> <span id="loadedQualitySpan" class="value">-</span></p>
+                <p><span class="label">Network Trend:</span> <span id="networkTrendSpan" class="value status-neutral">-</span></p>
             </div>
 
             <div class="panel" id="networkQoePanel"> 
@@ -279,6 +280,27 @@
                             estimatedAbrBwSpan.textContent = `${message.data.estimated_Mbps.toFixed(2)} Mbps`;
                         } else if (estimatedAbrBwSpan) {
                             estimatedAbrBwSpan.textContent = "N/A";
+                        }
+                    } else if (message.type === "ABR_NETWORK_STATE_UPDATE") {
+                        console.log("Handling ABR_NETWORK_STATE_UPDATE with data:", message.data);
+                        const trendSpan = document.getElementById('networkTrendSpan');
+                        if (trendSpan && message.data && message.data.trend) {
+                            let trendText = message.data.trend;
+                            let trendClass = 'status-neutral';
+                            if (message.data.is_sudden_drop) {
+                                trendText += " (Sudden Drop!)";
+                                trendClass = 'status-bad';
+                            } else if (message.data.is_volatile) {
+                                trendText += " (Volatile)";
+                                if (message.data.trend === "STABLE" || message.data.trend === "VOLATILE") trendClass = 'status-neutral'; // 波动但稳定可以是中性
+                                else if (message.data.trend === "DECREASING") trendClass = 'status-bad';
+                            } else if (message.data.trend === "INCREASING") {
+                                trendClass = 'status-good';
+                            } else if (message.data.trend === "DECREASING") {
+                                trendClass = 'status-bad';
+                            }
+                            trendSpan.textContent = trendText;
+                            trendSpan.className = 'value ' + trendClass; // 更新颜色类
                         }
                     }
                 } catch (e) { console.error("Error processing message from WebSocket:", e); }
