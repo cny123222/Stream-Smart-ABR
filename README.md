@@ -185,19 +185,3 @@ STARS consistently achieved the highest average QoE and lowest rebuffering ratio
 * Explore "soft classification" or fuzzy logic for network state assessment.
 * Investigate lightweight machine learning models for predictive enhancements.
 * Conduct subjective user studies to correlate objective QoE with perceived satisfaction.
-
-**Key additions and considerations in this README:**
-
-  * **Clear Title and Introduction**: Briefly explains what STARS is and its goals.
-  * **Features Section**: Highlights the main capabilities of your system and algorithm.
-  * **System Architecture**: Placeholder for you to add your diagram.
-  * **Project Structure**: Gives an overview of the codebase.
-  * **Setup and Usage**:
-      * Clear prerequisites.
-      * Step-by-step instructions for server setup (video download, segmentation, AES key, running server).
-      * Step-by-step instructions for client setup and running both single and batch experiments.
-  * **Plotting Results**: Instructions on how to use your `plot.py`.
-  * **STARS Algorithm Highlights**: A concise summary of what makes your algorithm special.
-  * **Results Summary (Example)**: A placeholder for you to put your main conclusions.
-  * **Future Work**: Standard section for academic projects.
-  * **Markdown Formatting**: Uses headers, bullet points, and code blocks for readability.
