@@ -62,6 +62,7 @@ Stream-Smart-ABR/
 ├── video_segments/       # Output directory for HLS segments and playlists
 ├── img/                   # For poster images
 ├── docs/                 # Documentation
+├── poster.pdf             # Our project poster
 ├── bbb_sunflower.mp4     # Source video file (after download and rename)
 ├── aes.key               # AES encryption key
 └── README.md             # This file
