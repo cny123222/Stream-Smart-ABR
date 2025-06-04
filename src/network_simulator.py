@@ -312,7 +312,8 @@ def create_default_simulation_scenario(mode = -1):
         add_stable_period_with_fluctuations(30, 1_500_000, 0.3, 4)   # 30秒：稳定在1.5M (1.05M-1.95M波动)
         add_gradual_change(1_500_000, 20_000_000, 35, num_steps=8) # 35秒：从1.5M升到20M
         
-    else: # 默认模式 (mode 9 或其他未指定模式) - 一个更长、更全面的综合测试场景
+    elif mode == 9: 
+        # 一个更长、更全面的综合测试场景
         logger.info("SIM_CTRL: Configuring Scenario Mode 9 (Default Long Comprehensive Test)")
         # 阶段1: 稳定高带宽 (25秒)
         add_stable_period_with_fluctuations(25, 20_000_000, 0.1, 5)  # 20M +/- 2M
@@ -328,6 +329,61 @@ def create_default_simulation_scenario(mode = -1):
         add_gradual_change(1_200_000, 12_000_000, 20, num_steps=5)
         # 阶段7: 中高带宽稳定期 (20秒)
         add_stable_period_with_fluctuations(20, 12_000_000, 0.1, 5) # 总时长约160秒
+
+    elif mode == 10:
+        # 稳定 0.25 Mbps - 极低带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 10 - Stable 0.5 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=500_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 11:
+        # 稳定 0.5 Mbps - 极低带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 11 - Stable 1 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=1_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 12:
+        # 稳定 1 Mbps - 低带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 12 - Stable 2 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=2_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 13:
+        # 稳定 2 Mbps - 中低带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 13 - Stable 4 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=4_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 14:
+        # 稳定 4 Mbps - 中低带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 14 - Stable 6 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=6_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 15:
+        # 稳定 8 Mbps - 中高带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 15 - Stable 8 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=8_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 16:
+        # 稳定 10 Mbps - 高带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 16 - Stable 12 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=12_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 17:
+        # 稳定 16 Mbps - 很高带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 17 - Stable 16 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=16_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 18:
+        # 稳定 25 Mbps - 超高带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 18 - Stable 25 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=25_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 19:
+        # 稳定 50 Mbps - 极高带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 19 - Stable 50 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=50_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
+    
+    elif mode == 20:
+        # 稳定 100 Mbps - 光纤级带宽
+        logger.info("SIM_CTRL: Configuring Scenario Mode 20 - Stable 100 Mbps")
+        add_stable_period_with_fluctuations(duration_seconds=100, base_bps=100_000_000, fluctuation_percent=0.05, fluctuation_interval_seconds=10)
         
     player.add_step(10, None) # 所有模式最后10秒全速
     return player
