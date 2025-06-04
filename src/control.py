@@ -19,13 +19,15 @@ if not logger.handlers: # 防止重复添加处理器
 # 定义不同的参数组合
 parameter_combinations = [
     # 例如: [决策逻辑类型, 网络环境场景]
-    [6, 9]
+    # [6, 9]
 ]
 
 # 生成参数组合 (决策逻辑 1-7, 网络环境 1-9)
 # for i in range(1, 8):
-#     for j in range(9, 10):
-#         parameter_combinations.append([i, j])
+for i in range(6, 7):
+    # for j in range(1, 10):
+    for j in range(10, 21):
+        parameter_combinations.append([i, j])
 
 # 用于跟踪当前正在运行的子进程
 current_process = None
