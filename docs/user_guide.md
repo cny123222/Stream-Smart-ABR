@@ -8,7 +8,7 @@
 
 2. **克隆项目代码**
     ```bash
-    git clone https://github.com/your-repo/Stream-Smart-ABR.git
+    git clone https://github.com/cny123222/Stream-Smart-ABR.git
     cd Stream-Smart-ABR
     ```
 
