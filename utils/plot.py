@@ -7,10 +7,10 @@ import seaborn as sns
 from math import pi
 
 # --- Configuration ---
-RESULTS_BASE_DIR = "./test_new_qoe"
+RESULTS_BASE_DIR = "./test"
 DECISION_METHODS = list(range(2, 6 + 1)) 
 NETWORK_ENVIRONMENTS = list(range(1, 9 + 1))
-OUTPUT_DIR = "./plots"
+OUTPUT_DIR = "./figures"
 
 METHOD_LABELS = {
     1: "SLBW",
