@@ -198,3 +198,6 @@ src/temp.py
 
 # Checkpoint files
 *.pth
+
+# Test result
+test*/

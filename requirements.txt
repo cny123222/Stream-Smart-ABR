@@ -1,3 +1,6 @@
 cryptography
 requests
 torch
+pandas
+matplotlib
+seaborn
