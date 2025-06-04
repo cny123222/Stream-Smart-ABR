@@ -1,4 +1,4 @@
-# STARS: STateful Adaptive Rate Selection for Enhanced QoE
+# STARS: STateful Adaptive Rate Selection
 
 **STARS (STateful & Throughput-Aware Adaptive Rate Selection)** is an intelligent HTTP Adaptive Streaming (HAS) system featuring a novel comprehensive rule-based Adaptive Bitrate (ABR) algorithm. This project aims to optimize Quality of Experience (QoE) by dynamically adapting video bitrate to network fluctuations, ensuring smooth and high-quality playback for users.
 
@@ -148,7 +148,7 @@ Stream-Smart-ABR/
         ```
     * Execute the control script from the project's root directory:
         ```bash
-        python src/control.py
+        python utils/control.py
         ```
     * Results for each combination (`case_{method_id}_{env_id}`) will be saved in the `./test/` directory (or as specified in `control.py`).
 
