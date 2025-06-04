@@ -575,9 +575,10 @@ class ABRManager:
                 if self.ewma_bandwidth_bps == 0.0:
                     self.ewma_bandwidth_bps = throughput_bps
                 else:
-                    term1 = self.ewma_alpha * throughput_bps
-                    term2_factor = (1 - self.ewma_alpha)
-                    term2 = term2_factor * self.ewma_bandwidth_bps
+                    self.ewma_bandwidth_bps = self.ewma_alpha * throughput_bps + \
+                                              (1 - self.ewma_alpha) * self.ewma_bandwidth_bps
+                                              
+                logger.debug(f"Updated Bandwidth Estimates: EWMA={self.ewma_bandwidth_bps/1e6:.2f} Mbps, SWMA={self.swma_bandwidth_bps/1e6:.2f} Mbps, LastSegThroughput={throughput_bps/1e6:.2f} Mbps")
                 
                 # 如果成功下载的是当前追踪的“卡住风险”分片，则重置相关状态
                 if url == self.current_segment_url_being_downloaded:

@@ -7,7 +7,7 @@ import numpy as np # 用于处理可能的NaN值
 # --- 配置区域 ---
 RESULTS_BASE_DIR = "./test_old"  # 存放 case_{a}_{b} 文件夹的基础目录
 # 决策方法 a 的范围 (假设是 1 到 7)
-DECISION_METHODS = list(range(1, 7)) # [1, 2, 3, 4, 5, 6, 7]
+DECISION_METHODS = list(range(2, 7)) # [1, 2, 3, 4, 5, 6, 7]
 # 网络环境 b 的范围 (假设是 1 到 9)
 NETWORK_ENVIRONMENTS = list(range(1, 9 + 1)) # [1, 2, ..., 9]
 # 图表保存目录
@@ -50,7 +50,7 @@ for method_id in DECISION_METHODS:
                         "term1_quality": term1,
                         "term2_rebuffering": term2,
                         "term3_switching": term3,
-                        "final_qoe_score": term1 - (term2 / 2.8 * 3.5) - term3 * 0.8,
+                        "final_qoe_score": term1 - (term2 / 2.8 * 5) - term3 * 1,
                         # 你也可以在这里提取其他你感兴趣的指标，如：
                         # "avg_bitrate_kbps": float(data.get("average_played_bitrate_kbps", "").replace(" Kbps", "") if isinstance(data.get("average_played_bitrate_kbps"), str) else data.get("average_played_bitrate_kbps", np.nan)),
                         # "rebuffering_ratio_percent": float(data.get("rebuffering_ratio", "").replace("%", "") if isinstance(data.get("rebuffering_ratio"), str) else data.get("rebuffering_ratio", np.nan)),
