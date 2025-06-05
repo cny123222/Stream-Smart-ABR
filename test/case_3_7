@@ -1,0 +1,77 @@
+{
+    "final_qoe_score": "25.95",
+    "quality": "0.8975",
+    "effective_ratio": 0.8613718441953021,
+    "weighted_quality": "2.1896",
+    "PSNR": "38.59",
+    "switch_count": "5",
+    "rebuffering_counts": "3",
+    "rebuffering_duration": "13434.00 ms",
+    "total_duration": "100196.10 ms",
+    "rebuffering_ratio": "13.41%",
+    "startup_latency": "456.00 ms",
+    "time_at_each_level_ms": {
+        "0": 10071.0,
+        "1": 26479.0,
+        "2": 3220.0,
+        "3": 30876.0,
+        "4": 21951.0
+    },
+    "average_played_bitrate_kbps": "7279.14 Kbps",
+    "qoe_formula_details": {
+        "term1_total_time_weighted_quality": "83.10",
+        "term2_rebuffering_penalty": "53.74",
+        "term3_switch_penalty": "3.41",
+        "param_mu": 4.0,
+        "param_tau": 1.0
+    },
+    "switching_events": [
+        {
+            "timestamp": 1748999824731,
+            "from_level": 0,
+            "to_level": 3,
+            "to_bitrate": 8192000
+        },
+        {
+            "timestamp": 1748999846584,
+            "from_level": 3,
+            "to_level": 2,
+            "to_bitrate": 4128000
+        },
+        {
+            "timestamp": 1748999849972,
+            "from_level": 2,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        },
+        {
+            "timestamp": 1748999882435,
+            "from_level": 1,
+            "to_level": 3,
+            "to_bitrate": 8192000
+        },
+        {
+            "timestamp": 1748999892458,
+            "from_level": 3,
+            "to_level": 4,
+            "to_bitrate": 16256000
+        }
+    ],
+    "rebuffering_events": [
+        {
+            "start_ts": 1748999834295,
+            "duration_ms": 1000,
+            "end_ts": 1748999835295
+        },
+        {
+            "start_ts": 1748999840302,
+            "duration_ms": 6450,
+            "end_ts": 1748999846752
+        },
+        {
+            "start_ts": 1748999850336,
+            "duration_ms": 5984,
+            "end_ts": 1748999856320
+        }
+    ]
+}

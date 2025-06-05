@@ -1,0 +1,79 @@
+{
+    "final_qoe_score": "6.19",
+    "quality": "0.2309",
+    "effective_ratio": 0.965373104462905,
+    "weighted_quality": "1.6790",
+    "PSNR": "31.62",
+    "switch_count": "7",
+    "rebuffering_counts": "1",
+    "rebuffering_duration": "3132.36 ms",
+    "total_duration": "100048.36 ms",
+    "rebuffering_ratio": "3.13%",
+    "startup_latency": "332.00 ms",
+    "time_at_each_level_ms": {
+        "0": 60562.0,
+        "1": 12648.0,
+        "2": 17332.0,
+        "3": 6050.0,
+        "4": 0.0
+    },
+    "average_played_bitrate_kbps": "2004.51 Kbps",
+    "qoe_formula_details": {
+        "term1_total_time_weighted_quality": "22.30",
+        "term2_rebuffering_penalty": "12.53",
+        "term3_switch_penalty": "3.58",
+        "param_mu": 4.0,
+        "param_tau": 1.0
+    },
+    "switching_events": [
+        {
+            "timestamp": 1748997339295,
+            "from_level": 0,
+            "to_level": 3,
+            "to_bitrate": 8192000
+        },
+        {
+            "timestamp": 1748997345345,
+            "from_level": 3,
+            "to_level": 2,
+            "to_bitrate": 4128000
+        },
+        {
+            "timestamp": 1748997358997,
+            "from_level": 2,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        },
+        {
+            "timestamp": 1748997365495,
+            "from_level": 1,
+            "to_level": 0,
+            "to_bitrate": 864000
+        },
+        {
+            "timestamp": 1748997395131,
+            "from_level": 0,
+            "to_level": 2,
+            "to_bitrate": 4128000
+        },
+        {
+            "timestamp": 1748997398811,
+            "from_level": 2,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        },
+        {
+            "timestamp": 1748997404961,
+            "from_level": 1,
+            "to_level": 0,
+            "to_bitrate": 864000
+        }
+    ],
+    "rebuffering_events": [
+        {
+            "start_ts": 1748997415403,
+            "duration_ms": 3132.3642578125,
+            "end_ts": 1748997418535.3643
+        }
+    ]
+}

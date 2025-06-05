@@ -1,0 +1,79 @@
+{
+    "final_qoe_score": "11.76",
+    "quality": "0.1461",
+    "effective_ratio": 0.9964835461481945,
+    "weighted_quality": "1.6408",
+    "PSNR": "30.76",
+    "switch_count": "8",
+    "rebuffering_counts": "0",
+    "rebuffering_duration": "0.00 ms",
+    "total_duration": "99816.47 ms",
+    "rebuffering_ratio": "0.00%",
+    "startup_latency": "351.00 ms",
+    "time_at_each_level_ms": {
+        "0": 59638.0,
+        "1": 32259.0,
+        "2": 7579.0,
+        "3": 0.0,
+        "4": 0.0
+    },
+    "average_played_bitrate_kbps": "1350.06 Kbps",
+    "qoe_formula_details": {
+        "term1_total_time_weighted_quality": "14.53",
+        "term2_rebuffering_penalty": "0.00",
+        "term3_switch_penalty": "2.77",
+        "param_mu": 4.0,
+        "param_tau": 1.0
+    },
+    "switching_events": [
+        {
+            "timestamp": 1748996610415,
+            "from_level": 0,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        },
+        {
+            "timestamp": 1748996620240,
+            "from_level": 1,
+            "to_level": 2,
+            "to_bitrate": 4128000
+        },
+        {
+            "timestamp": 1748996624102,
+            "from_level": 2,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        },
+        {
+            "timestamp": 1748996630280,
+            "from_level": 1,
+            "to_level": 0,
+            "to_bitrate": 864000
+        },
+        {
+            "timestamp": 1748996650099,
+            "from_level": 0,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        },
+        {
+            "timestamp": 1748996660315,
+            "from_level": 1,
+            "to_level": 2,
+            "to_bitrate": 4128000
+        },
+        {
+            "timestamp": 1748996664032,
+            "from_level": 2,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        },
+        {
+            "timestamp": 1748996670072,
+            "from_level": 1,
+            "to_level": 0,
+            "to_bitrate": 864000
+        }
+    ],
+    "rebuffering_events": []
+}

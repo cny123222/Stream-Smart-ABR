@@ -1,0 +1,103 @@
+{
+    "final_qoe_score": "16.81",
+    "quality": "0.5629",
+    "effective_ratio": 0.9383780457545686,
+    "weighted_quality": "1.9705",
+    "PSNR": "35.54",
+    "switch_count": "11",
+    "rebuffering_counts": "1",
+    "rebuffering_duration": "5881.00 ms",
+    "total_duration": "99834.55 ms",
+    "rebuffering_ratio": "5.89%",
+    "startup_latency": "271.00 ms",
+    "time_at_each_level_ms": {
+        "0": 62124.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 15951.0,
+        "4": 21505.0
+    },
+    "average_played_bitrate_kbps": "5361.85 Kbps",
+    "qoe_formula_details": {
+        "term1_total_time_weighted_quality": "56.06",
+        "term2_rebuffering_penalty": "23.53",
+        "term3_switch_penalty": "15.72",
+        "param_mu": 4.0,
+        "param_tau": 1.0
+    },
+    "switching_events": [
+        {
+            "timestamp": 1748928445815,
+            "from_level": 0,
+            "to_level": 4,
+            "to_bitrate": 16256000
+        },
+        {
+            "timestamp": 1748928452569,
+            "from_level": 4,
+            "to_level": 3,
+            "to_bitrate": 8192000
+        },
+        {
+            "timestamp": 1748928462058,
+            "from_level": 3,
+            "to_level": 4,
+            "to_bitrate": 16256000
+        },
+        {
+            "timestamp": 1748928462272,
+            "from_level": 4,
+            "to_level": 0,
+            "to_bitrate": 864000
+        },
+        {
+            "timestamp": 1748928476679,
+            "from_level": 0,
+            "to_level": 4,
+            "to_bitrate": 16256000
+        },
+        {
+            "timestamp": 1748928482540,
+            "from_level": 4,
+            "to_level": 0,
+            "to_bitrate": 864000
+        },
+        {
+            "timestamp": 1748928492181,
+            "from_level": 0,
+            "to_level": 4,
+            "to_bitrate": 16256000
+        },
+        {
+            "timestamp": 1748928495759,
+            "from_level": 4,
+            "to_level": 3,
+            "to_bitrate": 8192000
+        },
+        {
+            "timestamp": 1748928502221,
+            "from_level": 3,
+            "to_level": 0,
+            "to_bitrate": 864000
+        },
+        {
+            "timestamp": 1748928522191,
+            "from_level": 0,
+            "to_level": 4,
+            "to_bitrate": 16256000
+        },
+        {
+            "timestamp": 1748928527292,
+            "from_level": 4,
+            "to_level": 0,
+            "to_bitrate": 864000
+        }
+    ],
+    "rebuffering_events": [
+        {
+            "start_ts": 1748928516313,
+            "duration_ms": 5881,
+            "end_ts": 1748928522194
+        }
+    ]
+}

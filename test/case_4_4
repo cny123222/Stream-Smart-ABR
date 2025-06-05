@@ -1,0 +1,73 @@
+{
+    "final_qoe_score": "-44.20",
+    "quality": "1.0330",
+    "effective_ratio": 0.6389445424899075,
+    "weighted_quality": "1.9914",
+    "PSNR": "40.38",
+    "switch_count": "6",
+    "rebuffering_counts": "1",
+    "rebuffering_duration": "35853.00 ms",
+    "total_duration": "100042.80 ms",
+    "rebuffering_ratio": "35.84%",
+    "startup_latency": "268.00 ms",
+    "time_at_each_level_ms": {
+        "0": 16908.0,
+        "1": 13333.0,
+        "2": 10086.0,
+        "3": 20596.0,
+        "4": 38858.0
+    },
+    "average_played_bitrate_kbps": "8798.49 Kbps",
+    "qoe_formula_details": {
+        "term1_total_time_weighted_quality": "103.08",
+        "term2_rebuffering_penalty": "143.41",
+        "term3_switch_penalty": "3.87",
+        "param_mu": 4.0,
+        "param_tau": 1.0
+    },
+    "switching_events": [
+        {
+            "timestamp": 1748927300824,
+            "from_level": 0,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        },
+        {
+            "timestamp": 1748927310667,
+            "from_level": 1,
+            "to_level": 2,
+            "to_bitrate": 4128000
+        },
+        {
+            "timestamp": 1748927320753,
+            "from_level": 2,
+            "to_level": 3,
+            "to_bitrate": 8192000
+        },
+        {
+            "timestamp": 1748927341349,
+            "from_level": 3,
+            "to_level": 4,
+            "to_bitrate": 16256000
+        },
+        {
+            "timestamp": 1748927380207,
+            "from_level": 4,
+            "to_level": 0,
+            "to_bitrate": 864000
+        },
+        {
+            "timestamp": 1748927390856,
+            "from_level": 0,
+            "to_level": 1,
+            "to_bitrate": 1596000
+        }
+    ],
+    "rebuffering_events": [
+        {
+            "start_ts": 1748927344355,
+            "duration_ms": 35853,
+            "end_ts": 1748927380208
+        }
+    ]
+}
