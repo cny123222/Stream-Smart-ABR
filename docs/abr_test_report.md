@@ -17,7 +17,7 @@
 
 ### 不同带宽下指标趋势图
 
-![不同带宽下的卡顿率与PSNR变化趋势](stable_bandwidth_analysis.png)
+![不同带宽下的卡顿率与PSNR变化趋势](../result/stable_bandwidth_analysis.png)
 
 ### 指标对比数据表
 
@@ -59,16 +59,15 @@
   - **QoE Score**：视频质量、卡顿时间、切换次数的加权结果
 
 
-### 测试结果图
+### 测试结果
 
-![卡顿率](bar_env_rebuffering_ratio.png)
+![最终结果](../result/final_comparison_chart.png)
 
-![PSNR](bar_env_psnr.png)
+![卡顿率](../figures/line_term2_rebuf_penalty_plot.png)
 
-![QoE Score](bar_env_final_qoe_score.png)
+![PSNR](../figures/bar_mean_psnr.png)
 
-### 对比结果表格
-![最终结果](final_comparison_chart.png)
+![QoE Score](../figures/bar_mean_final_qoe_score.png)
 
 ## 五、结论
 
