@@ -114,10 +114,8 @@ class QoEMetricsManager:
 
     def print_summary(self, available_abr_streams=None,
                       # --- QoE 公式参数 ---
-                      qoe_mu=2.8,          # 卡顿惩罚系数 mu (可以根据需要调整)
-                      qoe_tau=1.0,           # 切换惩罚系数 tau (可以根据需要调整)
-                      # segment_duration_seconds 现在不再直接用于qoe_total_quality_term的计算，
-                      # 但保留它可能对理解或记录总分片数有帮助
+                      qoe_mu=4.0,          # 卡顿惩罚系数 mu
+                      qoe_tau=1.0,           # 切换惩罚系数 tau
                       segment_duration_seconds=5.0 
                      ):
         logger.info("--- QoE Summary ---") # 日志: 开始打印QoE总结
