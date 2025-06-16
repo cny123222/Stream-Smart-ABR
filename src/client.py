@@ -613,12 +613,11 @@ def main():
 
     # 创建解析器对象
     parser = argparse.ArgumentParser(description='Client application with two integer arguments')
-    # 添加第一个整数参数
-    parser.add_argument('arg1', type=int, help='abr_decision')
-    # 添加第二个整数参数
-    parser.add_argument('arg2', type=int, help='network_condition')
-    # 添加第三个字符串参数
-    parser.add_argument('arg3', type=str, help='write_path')
+    
+    parser.add_argument('arg1', type=int, nargs='?', default=6, help='abr_decision (optional)')
+    parser.add_argument('arg2', type=int, nargs='?', default=9, help='network_condition (optional)')
+    parser.add_argument('arg3', type=str, nargs='?', default="tmp_log", help='write_path (optional)')
+            
     # 解析命令行参数
     args = parser.parse_args()
 
@@ -658,9 +657,7 @@ def main():
     available_streams = fetch_master_m3u8_for_abr_init(master_m3u8_url)
     if available_streams:
         # --- 选择想要的决策逻辑 ---
-        # selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_ONLY
-        selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
-        # selected_logic = ABRManager.LOGIC_TYPE_ENHANCED_BUFFER_RESPONSE 
+        selected_logic = None
 
         if abr_decision == 1:
             selected_logic = ABRManager.LOGIC_TYPE_SLBW
@@ -676,9 +673,8 @@ def main():
             selected_logic = ABRManager.LOGIC_TYPE_COMPREHENSIVE
         elif abr_decision == 7:
             selected_logic = ABRManager.LOGIC_TYPE_DQN
-        else:
-            logger.error("Invalid ABR decision. Using default logic.")
-            selected_logic = ABRManager.LOGIC_TYPE_BANDWIDTH_BUFFER
+
+        logger.info(f"Selected ABR logic type: {selected_logic}")
             
         abr_manager_instance = ABRManager(
             available_streams,

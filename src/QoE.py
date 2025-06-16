@@ -122,7 +122,6 @@ class QoEMetricsManager:
         if not self.session_start_time_ms: # 检查是否有播放活动被记录
             logger.info("  No playback activity recorded for QoE summary.") # 日志: 没有播放活动记录
             logger.info("--------------------")
-            # (你之前的默认返回 status 字典)
             return {
                 'final_qoe_score': 'N/A', 'quality': 'N/A', 'effective_ratio': 'N/A', 
                 'weighted_quality': 'N/A', 'PSNR': 'N/A', 'startup_latency': 'Not recorded',
@@ -230,18 +229,18 @@ class QoEMetricsManager:
         qoe_switch_penalty_term = qoe_tau * qoe_total_switch_abs_diff_sum
         logger.info(f"QoE Metric - Term 3 (Switch Penalty): {qoe_switch_penalty_term:.2f} (tau={qoe_tau}, sum|q_diff|={qoe_total_switch_abs_diff_sum:.2f})")
         
-        # 计算最终 QoE 得分 (这部分不变)
+        # 计算最终 QoE 得分
         final_qoe_score_val = qoe_total_quality_term - qoe_rebuffering_penalty_term - qoe_switch_penalty_term
         logger.info(f"QoE Metric - Final Calculated QoE Score: {final_qoe_score_val:.2f}")
         # --- QoE 公式计算结束 ---
 
-        # --- 准备写入文件的status字典 (保持你之前的结构，只更新值) ---
+        # --- 准备写入文件的status字典 ---
         status = {
             'final_qoe_score': f'{final_qoe_score_val:.2f}',
-            'quality': 'N/A', # 将通过下面的旧逻辑计算并更新
+            'quality': 'N/A', 
             'effective_ratio': (self.total_session_duration_ms - total_stall_duration_ms - startup_latency_ms_val) / self.total_session_duration_ms if self.total_session_duration_ms > 0 else 1.0,
-            'weighted_quality': 'N/A', # 将通过下面的旧逻辑计算并更新
-            'PSNR': 'N/A', # 将通过下面的旧逻辑计算并更新
+            'weighted_quality': 'N/A',
+            'PSNR': 'N/A',
             'switch_count': f'{len(self.quality_switches_log)}',
             'rebuffering_counts': f'{num_stalls}',
             'rebuffering_duration': f'{total_stall_duration_ms:.2f} ms',
@@ -261,12 +260,11 @@ class QoEMetricsManager:
             'rebuffering_events': self.rebuffering_events
         }
         
-        # 填充 time_at_each_level_ms (保持不变)
+        # 填充 time_at_each_level_ms 
         for level_idx, duration_ms in self.time_at_each_level.items():
             if str(level_idx) in status['time_at_each_level_ms']:
                  status['time_at_each_level_ms'][str(level_idx)] = float(f"{duration_ms:.0f}")
 
-        # --- 保留并执行你之前的 'quality', 'PSNR', 和 'weighted_quality' 计算逻辑 (保持不变) ---
         total_duration_for_legacy_calc_ms = 0.0
         legacy_quality_val_sum_weighted = 0.0
         legacy_psnr_val_sum_weighted = 0.0
@@ -292,9 +290,8 @@ class QoEMetricsManager:
         except ValueError:
             logger.warning("Could not calculate weighted_quality due to non-numeric 'quality' or 'effective_ratio'.")
             status['weighted_quality'] = 'N/A'
-        # --- 结束保留的旧指标计算 ---
         
-        # 写入文件 (保持不变)
+        # 写入文件
         if self.write_path: 
             try:
                 with open(self.write_path, 'w', encoding='utf-8') as f:

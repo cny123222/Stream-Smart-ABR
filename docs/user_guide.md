@@ -40,27 +40,26 @@
     - **注意**：在 Windows 下，可能需要以管理员身份运行命令提示符（CMD）
 
 2. **启动播放器前端**
-    - 首先打开 `player.html`
     ```bash
-    python utils/control.py
+    python src/client.py
     ```
     - **注意**：在 Windows 下，可能需要以管理员身份运行命令提示符（CMD）
-    - 脚本会自动遍历参数组合，依次调用 [client.py]，并将结果输出到 `test` 目录下。（需手动创建test目录）
 
-3. **参数说明**
+3. **测试方法**
+   ```bash
+   python src/client.py 6 9 ./test/case_6_9
+   ```
    - 每组测试参数包括：
-     - ABR 决策逻辑编号（如 1~7）
-     - 网络环境编号（如 1~9）
-     - 输出路径（自动生成，格式如 `./test/case_1_1`）
+     - ABR 决策逻辑编号（1 ~ 7）
+     - 网络环境编号（1 ~ 9）
+     - 输出路径
 
 4. **调试建议**
     - 使用浏览器开发者工具（F12）查看网络请求和控制台日志
     - 检查播放器与后端的通信是否正常
-    - 控制台会输出详细日志并保存于transmission_log.txt，包括每次测试的参数、进程状态和异常信息，便于定位问题。
+    - 服务器会输出详细日志并保存于transmission_log.txt，包括每次测试的参数、进程状态和异常信息，便于定位问题。
     - 可通过日志信息追踪每一步的执行情况，定位异常或性能瓶颈。
-    - 如需单独调试某一组参数，可修改 control.py 中的 parameter_combinations，只保留需要的组合。
-    - 若需调试 client.py 逻辑，可直接运行：python src/client.py <ABR编号> <网络环境编号> <输出路径>
-    
+    - 如需调试多组参数，可使用 control.py 并修改其中的 parameter_combinations，只保留需要的组合
     - 如需添加新的 ABR 决策或网络环境，请参考 `docs/test_tutorial.md`。
 ---
 
