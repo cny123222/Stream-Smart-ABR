@@ -242,7 +242,7 @@ if __name__ == '__main__':
     SOURCE_VIDEO_FILE = "bbb_sunflower.mp4"     # 输入视频文件路径。
     BASE_OUTPUT_DIR = "video_segments"          # 所有输出的顶级目录。
     SEGMENT_DURATION = 5                        # 每个HLS分片的目标持续时间（秒）。
-    VIDEO_FRAMERATE = 30 # 用于GOP计算的假定帧率。如果您的源不同，请调整。
+    VIDEO_FRAMERATE = 30 # 用于GOP计算的假定帧率。如果源不同，请调整。
                          # 使用'ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 your_video.mp4'
                          # 获取实际帧率（例如，30000/1001表示29.97fps）。
 
@@ -272,7 +272,7 @@ if __name__ == '__main__':
         # - '-keyint_min <min_keyframe_interval>': 最小关键帧间隔。通常与帧率相同。
         # - '-preset': 控制编码速度与压缩效率。'fast'是常见的平衡。
         #   其他选项: 'ultrafast'、'superfast'、'veryfast'、'faster'、'medium'、'slow'、'slower'、'veryslow'。
-        # - 编解码器字符串: 'avc1...'表示H.264，'mp4a.40.2'表示AAC-LC。这些应与您的编码匹配。
+        # - 编解码器字符串: 'avc1...'表示H.264，'mp4a.40.2'表示AAC-LC。这些应与编码匹配。
         #   'avc1...'中的十六进制部分（例如，64001e）表示配置文件和级别。
         #   如果更改配置文件/级别，请查阅H.264文档或使用工具确定正确值。
 
