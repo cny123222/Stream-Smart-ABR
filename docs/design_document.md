@@ -1,8 +1,12 @@
-1. 系统架构设计
+## 系统架构设计
+
     1. 整体架构概览
     Stream Smart ABR 系统采用分层架构设计，主要包含以下核心组件:
+
     ![Stream Smart ABR 系统架构图](../img/system_architecture.png)
+
     2. 核心组件详细设计
+
         1. HLS媒体服务器 (`server.py`)
         功能职责:
             * 提供多码率视频分片的HTTP服务
@@ -24,6 +28,7 @@
             * 跨域访问控制 (CORS)
 
         2. 本地代理服务器 (`client.py`)
+
         功能职责：
             * 作为客户端和源服务器之间的透明代理
             * 解密视频分片数据
@@ -43,7 +48,9 @@
             * 主播放列表：将源服务器URL替换为代理URL
             * 媒体播放列表：将分片URL替换为解密端点
             * 分片请求：添加网络模拟和性能监控
+
         3. ABR管理器 (`ABR.py`)
+
         架构设计：
             ```python
             class ABRManager:
@@ -62,6 +69,7 @@
             * 带宽历史记录 (`bandwidth_history_for_trend`)
             * 缓冲区状态 (`current_player_buffer_s`)
             * 切换控制 (`last_switch_time`, `MIN_SWITCH_INTERVAL`)
+
         4. 网络模拟器 (`network_simulator.py`)
         场景设计:
             ```python
@@ -82,6 +90,7 @@
                 # 4KB块传输 + 延迟控制
                 # 支持网络波动模拟
             ```
+
         5. QoE评估系统 (`QoE.py`)
             QoE计算模型：
             基于ITU-T标准的QoE量化公式
@@ -92,8 +101,11 @@
             $T_k$ - 在质量级别k的播放时间
             $\mu = 2.8$ - 卡顿惩罚系数
             $\tau = 1.0$ - 切换惩罚系数
+
     3. 通信机制设计
+
         1. WebSocket双向通信
+
         消息类型定义：
             ```python
             // 客户端 → 服务端
@@ -112,6 +124,7 @@
                 "data": { ... }
             }
             ```
+
         2. 线程同步机制
         多线程协调：
             * 主线程：应用控制和信号处理
@@ -124,8 +137,11 @@
             self._internal_lock = threading.Lock()  # ABR状态保护
             g_simulation_lock = threading.Lock()     # 网络模拟保护
             ```
-2. 分片协议格式设计
+
+## 分片协议格式设计
+
     1. HLS协议扩展
+
         1. Master播放列表格式
             ```
             #EXTM3U
@@ -141,6 +157,7 @@
             #EXT-X-STREAM-INF:BANDWIDTH=16256000,RESOLUTION=3840x2160,CODECS="avc1.640033,mp4a.40.2"
             2160p-16000k/bbb_sunflower-2160p-16000k.m3u8
             ```
+
         2. Media播放列表格式
             ```
             #EXTM3U
@@ -155,8 +172,11 @@
             ...
             #EXT-X-ENDLIST
             ```
+
     2. 加密传输协议
+
         1. AES-CBC加密方案
+
             加密流程：
             ```python
             def aes_encrypt_cbc(plaintext: bytes, key: bytes) -> bytes:
@@ -173,7 +193,9 @@
             * 预共享密钥存储在aes.key文件
             * 支持128位和256位AES密钥
             * 每个分片使用随机IV确保安全性
+
         2. 分片传输格式
+
             HTTP请求格式：
             ```
             GET /decrypt_segment?url=<encoded_original_url> HTTP/1.1
@@ -188,8 +210,11 @@
             
             <decrypted_ts_data>
             ```
+
     3. URL重写机制
+
         1. 代理URL映射
+
         原始URL → 代理URL转换：
             ```
             # 主播放列表重写
@@ -204,10 +229,15 @@
             original: http://127.0.0.1:8081/bbb_sunflower/1080p-8000k/segment-00001.ts
             proxied:  http://127.0.0.1:8082/decrypt_segment?url=<encoded_original_url>
             ```
-3. ABR算法流程设计
+
+## ABR算法流程设计
+
 ![ABR算法流程图](../img/ABR_logic.png)
+
     1. 算法分类体系
+
         1. 基础启发式算法
+
             * SLBW (Simple Last Bandwidth)
                 ```python
                 def _logic_slbw(self):
@@ -233,6 +263,7 @@
                 ```
 
         2. 缓冲区感知算法
+
             Buffer-Only算法：
             ```python
             def _logic_buffer_only(self):
@@ -257,7 +288,9 @@
                 else:
                     dynamic_safety_factor = 0.8      # 正常情况
             ```
+
         3. 综合规则算法
+
             网络状态分析：
             ```python
             def get_network_analysis_features(self):
@@ -295,6 +328,7 @@
             ```
 
         4. 深度强化学习算法
+
             DQN网络架构：
             ```python
             class DQNNetwork(nn.Module):
@@ -338,7 +372,9 @@
                 
                 return quality_reward + buffer_reward + switch_penalty + bandwidth_efficiency
             ```
+
     2. 决策执行流程
+
         1. ABR主循环
             ```python
             def abr_loop(self):
@@ -396,7 +432,9 @@
                 # 5. 广播切换命令
                 self.broadcast_abr_decision(self.current_stream_index_by_abr)
             ```
+
     3. 性能监控与反馈
+
         1. 分片下载监控
             ```python
             def add_segment_download_stat(self, url, size_bytes, duration_seconds):
@@ -418,6 +456,7 @@
                     if len(self.segment_download_stats) > self.max_bw_stats_history:
                         self.segment_download_stats.pop(0)
             ```
+
         2. QoE实时评估
             ```python
             class QoEMetricsManager:
@@ -441,7 +480,9 @@
                         'end_ts': None
                     })
             ```
+
     4. 算法性能对比
+
         1. 测试框架
         ```python
         # control.py - 自动化测试控制
@@ -455,6 +496,7 @@
                        str(params[0]), str(params[1]), output_path]
             subprocess.run(command, timeout=120)  # 2分钟测试
         ```
+
         2. 评估指标
         QoE综合得分：
         ```python
