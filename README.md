@@ -4,6 +4,8 @@
 
 The system includes an HLS server with AES-encrypted segment delivery, a client-side proxy for decryption and network condition simulation, an hls.js-based web player, and a robust evaluation framework.
 
+![Playback Interface](img/player.png)
+
 **Team Members:** Nuoyan Chen, Ruikang Lin, Zhuofan Chen, Xuanzhe Yu, Qiushi Yao
 **Affiliation:** Shanghai Jiao Tong University
 **Course:** CS3611 (Computer Networks)
@@ -46,10 +48,10 @@ Stream-Smart-ABR/
 │   ├── AES.py            # AES encryption/decryption utilities
 │   ├── QoE.py            # QoEMetricsManager class
 │   ├── client.py         # Main client application, proxy, WebSocket server
+│   ├── extra_client.py   # Multiple clients simulation
 │   ├── control.py        # Automated test runner script
 │   ├── network_simulator.py # Network bandwidth simulation logic
 │   ├── player.html       # Web-based HLS player
-│   ├── psnr_calculator.py # Utility for PSNR calculation (if used offline)
 │   ├── segment_video.py  # Script for video segmentation using FFmpeg
 │   ├── server.py         # HTTP HLS server
 ├── utils/
