@@ -1,4 +1,4 @@
-# Stream-Smart-ABR 用户手册
+# STARS 用户手册
 
 ## 环境配置步骤
 
