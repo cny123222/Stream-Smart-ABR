@@ -2,7 +2,6 @@ import os
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.backends import default_backend
-# import cv2  # 添加 OpenCV 库
 import numpy as np
 
 def read_aes_key(file_path: str) -> bytes:

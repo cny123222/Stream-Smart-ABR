@@ -137,8 +137,7 @@ class QoEMetricsManager:
                 },
                 'switching_events': [], 'rebuffering_events': []
             }
-
-        # --- 原有的统计数据计算 (保持不变) ---
+            
         startup_latency_ms_val = self.startup_latency_ms if self.startup_latency_ms is not None else 0.0
         if self.startup_latency_ms is not None:
             logger.info(f"  Startup Latency: {self.startup_latency_ms:.2f} ms")

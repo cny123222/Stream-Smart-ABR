@@ -267,7 +267,7 @@ if __name__ == '__main__':
         #
         # FFmpeg选项的重要说明:
         # - '-map 0:v:0 -map 0:a:0': 假设主要视频和音频是其类型的第一个。
-        #   始终使用'ffprobe'验证您的特定源视频。
+        #   始终使用'ffprobe'验证特定源视频。
         # - '-g <GOP_size>': 图像组大小。对于HLS通常是帧率的2倍。
         # - '-keyint_min <min_keyframe_interval>': 最小关键帧间隔。通常与帧率相同。
         # - '-preset': 控制编码速度与压缩效率。'fast'是常见的平衡。

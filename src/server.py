@@ -20,7 +20,7 @@ PORT = 8081       # 服务器监听的端口号
 #     └── 质量2 (例如720p-4000k)/
 #     │   └── ...
 #     └── master.m3u8 (可选的主播放列表，指向不同质量的媒体播放列表)
-BASE_SEGMENTS_DIR = "video_segments"  # 【重要】请修改为你的实际分片存储根目录
+BASE_SEGMENTS_DIR = "video_segments"  # 【重要】请修改为实际分片存储根目录
 LOG_FILE = "transmission_log.txt" # 日志文件名
 BUFFER_SIZE = 4096               # 文件传输时使用的缓冲区大小 (字节) - http.server内部处理
 

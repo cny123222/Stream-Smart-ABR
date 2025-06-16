@@ -66,16 +66,15 @@ def fetch_master_m3u8_for_abr_init(master_m3u8_url_on_server):
                     # os.path.normpath 处理掉可能的 './' 或 '../' (虽然这里通常是直接的相对路径)
                     # os.path.dirname 会给出 "2160p-16000k" (如果路径是 "2160p-16000k/file.m3u8")
                     # 如果 media_playlist_relative_url 直接就是 "2160p-16000k.m3u8" 且没有目录结构，
-                    # 你可能需要不同的解析方式，或者确保你的URL结构是包含目录的。
-                    # 假设你的 master M3U8 中列出的媒体播放列表URL包含了质量目录，如下所示：
+                    # 假设 master M3U8 中列出的媒体播放列表URL包含了质量目录，如下所示：
                     # 2160p-16000k/bbb_sunflower-2160p-16000k.m3u8
                     path_parts = media_playlist_relative_url.replace('\\', '/').split('/')
                     if len(path_parts) > 1: # 期望至少有 "directory/file.m3u8"
                         derived_suffix = path_parts[0]
                     elif len(path_parts) == 1 and attributes.get('RESOLUTION'): # 如果没有目录，尝试从分辨率等属性构造一个
                         # 这是一个备选方案，如果URL不包含可识别的suffix目录
-                        # 你可以根据你的实际命名规则来构造，或者从其他属性推断
-                        # 例如，你可以基于分辨率和带宽构建一个类似 "2160p-16000k" 的字符串
+                        # 可以根据实际命名规则来构造，或者从其他属性推断
+                        # 例如，可以基于分辨率和带宽构建一个类似 "2160p-16000k" 的字符串
                         # 为了简单，如果URL没有目录，我们暂时不生成suffix，依赖于后续的匹配逻辑
                         logger.warning(f"Media playlist URL '{media_playlist_relative_url}' does not seem to have a quality directory prefix. Suffix might be unreliable.")
                         # derived_suffix = f"{attributes.get('RESOLUTION', 'unknownres')}_{attributes.get('BANDWIDTH', 0)//1000}k" # 示例构造
@@ -142,9 +141,9 @@ class ABRManager:
     LOGIC_TYPE_EWMA = "ewma"  # (Exponentially Weighted Moving Average) - 最近N个带宽的指数加权平均
     LOGIC_TYPE_BUFFER_ONLY = "buffer_only" # 只看缓冲区
     LOGIC_TYPE_BANDWIDTH_BUFFER = "bandwidth_buffer" # 当前的带宽+缓冲区组合逻辑 (可以作为基准或一种选项)
-    LOGIC_TYPE_COMPREHENSIVE = "comprehensive_rules" # 你设想的基于趋势、历史等的综合规则算法
-    # LOGIC_TYPE_DQN = "dqn" # 为DQN预留，但具体实现由外部控制或不同方式集成
+    LOGIC_TYPE_COMPREHENSIVE = "comprehensive_rules" # 我们的 STARS 综合逻辑
     LOGIC_TYPE_DQN = "dqn_rl" # DQN强化学习逻辑
+
 
     def __init__(self, available_streams_from_master, broadcast_abr_decision_callback,
                  broadcast_bw_estimate_callback=None,
@@ -706,7 +705,7 @@ class ABRManager:
                     else:
                         features['trend'] = "STABLE" # 单个点，只能认为是稳定
                 else: # 没有历史数据
-                    features['trend'] = "UNKNOWN" # 或者 "STABLE" 如果你倾向于保守
+                    features['trend'] = "UNKNOWN" # 或者 "STABLE" 如果倾向于保守
                 return features
 
             timestamps = np.array([t for t, bw in self.bandwidth_history_for_trend])
@@ -779,7 +778,7 @@ class ABRManager:
                 # 或者让 is_volatile 作为一个独立标志，决策时同时考虑 trend 和 is_volatile
                 if features['trend'] == "STABLE": 
                     features['trend'] = "VOLATILE" 
-                # 你也可以选择: features['trend'] = f"VOLATILE_{features['trend']}" # 创建复合趋势
+                # 也可以选择: features['trend'] = f"VOLATILE_{features['trend']}" # 创建复合趋势
             
             # 5. 如果趋势仍然是UNKNOWN (不太可能到这里，因为前面有默认STABLE)，则设为STABLE
             if features['trend'] == "UNKNOWN":
@@ -1117,8 +1116,8 @@ class ABRManager:
         applied_latest_segment_correction = False # 新增标志：是否已应用最新分片修正
 
         # 1. 初步的EWMA/SWMA混合 (如果SWMA有效且与EWMA差异大)
-        swma_ewma_discrepancy_ratio_alert = self.COMP_PARAMS.get("swma_ewma_discrepancy_ratio_for_alert", 1.6) # 你参数字典中的值
-        swma_influence_factor = self.COMP_PARAMS.get("swma_priority_factor_on_discrepancy", 0.8) # 你参数字典中的值 (swma_influence_factor_on_discrepancy)
+        swma_ewma_discrepancy_ratio_alert = self.COMP_PARAMS.get("swma_ewma_discrepancy_ratio_for_alert", 1.6) # 参数字典中的值
+        swma_influence_factor = self.COMP_PARAMS.get("swma_priority_factor_on_discrepancy", 0.8) # 参数字典中的值 (swma_influence_factor_on_discrepancy)
 
         if current_swma_bps > 0 and current_ewma_bps > current_swma_bps * swma_ewma_discrepancy_ratio_alert:
             using_swma_correction = True
@@ -1282,7 +1281,6 @@ class ABRManager:
 
         # --- 步骤 1b: 处理连续下载错误 (PANIC MODE) ---
         if consecutive_errors >= self.COMP_PARAMS.get("max_consecutive_error_for_panic", 3):
-            # ... (你原有的PANIC处理逻辑，这里基本不变) ...
             logger.error(
                 f"ComprehensiveABR: PANIC! {consecutive_errors} consecutive download errors. "
                 f"Forcing to lowest quality and entering long recovery."
@@ -1301,7 +1299,7 @@ class ABRManager:
 
         # --- 步骤 2 & 3: 分析网络状态并调整安全系数 ---
         network_features = self.get_network_analysis_features()
-        # current_safety_factor 和 derived_abr_state 初始化 (你原有的逻辑)
+        # current_safety_factor 和 derived_abr_state 初始化 
         current_safety_factor = self.COMP_PARAMS["safety_factor_stable"] 
         in_recovery_mode = time.time() < self.RECOVERY_HOLD_UNTIL_TIMESTAMP
         base_network_condition = network_features['trend']
@@ -1313,8 +1311,6 @@ class ABRManager:
                 logger.debug(f"ComprehensiveABR: Broadcasted network state features: {network_features.get('trend')}")
             except Exception as e_bns:
                 logger.error(f"Error broadcasting network state: {e_bns}")
-        # ... (你原有的根据 network_features, in_recovery_mode, is_current_segment_stuck 调整SF和derived_abr_state的逻辑) ...
-        # (这部分逻辑应保持，但要注意 derived_abr_state 的更新)
         if in_recovery_mode:
             current_safety_factor = self.COMP_PARAMS.get("safety_factor_recovering", 0.60) # 确保参数名与COMP_PARAMS中一致
             derived_abr_state = f"RECOVERING (from {base_network_condition})"
@@ -1376,13 +1372,11 @@ class ABRManager:
                     f"InRecoveryMode: {in_recovery_mode}")
         
         # --- （逻辑插入点 B）抢先降级判断 ---
-        # (这部分逻辑已在你上次的日志中看到被正确触发，所以结构应该是对的)
         preemptive_downgrade_activated = False
         if self.num_quality_levels > 0:
             high_level_thresh_idx = self.COMP_PARAMS.get("high_bitrate_level_threshold_idx", 1)
             is_on_high_level = current_level_index > high_level_thresh_idx
             if is_on_high_level:
-                # ... (你完整的抢先降级触发条件判断和执行逻辑) ...
                 current_level_bitrate_val = self.available_streams[current_level_index]['bandwidth']
                 preemptive_reason = ""
                 if is_current_segment_stuck and stuck_severity != "NONE": # 条件1
@@ -1400,7 +1394,6 @@ class ABRManager:
                 if preemptive_downgrade_activated:
                     logger.warning(f"ComprehensiveABR: PREEMPTIVE Downgrade Triggered. Reason: {preemptive_reason}")
                     target_lvl_after_preemptive = self.COMP_PARAMS.get("preemptive_downgrade_target_level_low_buffer", 0)
-                    # ... (你完整的抢先降级目标级别选择逻辑) ...
                     buffer_ok_thresh_factor = self.COMP_PARAMS.get("preemptive_downgrade_buffer_threshold_factor", 1.2)
                     if current_buffer_s > self.COMP_PARAMS["buffer_low_threshold"] * buffer_ok_thresh_factor:
                         if self.num_quality_levels > 1: 
@@ -1430,7 +1423,6 @@ class ABRManager:
             # rationale_for_emergency = f"EMERGENCY BUFFER ({current_buffer_s:.2f}s)" # Not used directly if decision is at the end
         
         elif in_recovery_mode: # 确保 is_emergency_decision_flag 为 false
-            # ... (你原有的恢复模式逻辑，确保 next_best_index 被设置) ...
             logger.info(f"ComprehensiveABR: In RECOVERY MODE ({derived_abr_state}).")
             if target_selectable_bps < self.available_streams[current_level_index]['bandwidth'] * 0.95 and current_level_index > 0:
                 temp_idx = 0
@@ -1445,7 +1437,7 @@ class ABRManager:
             # else: logger.info(f"ComprehensiveABR: RECOVERY - Holding level {current_level_index}...")
 
         else: # 正常模式
-            # can_consider_upgrade 判断 (你上次已加入详细日志)
+            # can_consider_upgrade 判断 
             cond1 = derived_abr_state in ["STABLE", "INCREASING", "STABLE+SWMA_Alert", "INCREASING+SWMA_Alert"]
             cond2 = not is_current_segment_stuck
             cond3 = current_buffer_s > self.COMP_PARAMS.get("buffer_trigger_upgrade_threshold_s", 35.0)
@@ -1459,15 +1451,12 @@ class ABRManager:
             if can_consider_upgrade:
                 logger.info(f"ComprehensiveABR: NORMAL ({derived_abr_state}) - Considering UPGRADE from level {current_level_index}.")
                 potential_upgrade_idx = current_level_index
-                # ... (你原有的 for 循环寻找 potential_upgrade_idx) ...
                 for i in range(self.num_quality_levels - 1, current_level_index, -1):
                     required_bw_for_this_level = self.available_streams[i]['bandwidth'] * self.COMP_PARAMS.get("normal_upgrade_selection_margin", 1.05)
                     if target_selectable_bps >= required_bw_for_this_level: potential_upgrade_idx = i; break
                 
                 if potential_upgrade_idx > current_level_index:
                     # --- 动态缓冲损失估计 和 UPGRADE CHECK 逻辑 ---
-                    # (这部分是你上次的核心修改，并且日志显示它在正确运行，包括打印 "Large bitrate jump detected...")
-                    # (请确保这部分代码与你上次测试成功的版本一致)
                     current_level_actual_bitrate = self.available_streams[current_level_index].get('bandwidth', 1)
                     new_level_actual_bitrate = self.available_streams[potential_upgrade_idx].get('bandwidth', 1)
                     bitrate_jump_ratio = float('inf')
@@ -1491,7 +1480,7 @@ class ABRManager:
                         buffer_change_per_segment_s = self.NOMINAL_SEGMENT_DURATION_S * (effective_bw_for_decision / new_level_bitrate_bps_proj - 1)
                     projected_buffer_after_one_segment = effective_buffer_for_projection_s + buffer_change_per_segment_s
                     
-                    min_projected_buffer_multiplier = self.COMP_PARAMS.get("min_projected_buffer_multiplier_vs_low", 2.0) # 使用你更新后的值
+                    min_projected_buffer_multiplier = self.COMP_PARAMS.get("min_projected_buffer_multiplier_vs_low", 2.0) # 使用更新后的值
                     min_buffer_needed_after_segment = self.COMP_PARAMS["buffer_low_threshold"] * min_projected_buffer_multiplier
                     min_buffer_needed_after_segment = max(min_buffer_needed_after_segment, self.NOMINAL_SEGMENT_DURATION_S * 2.0)
                     
@@ -1513,7 +1502,6 @@ class ABRManager:
 
                     upgrade_approved = False
                     if projected_buffer_after_one_segment >= min_buffer_needed_after_segment:
-                        # ... (你原有的 headroom 判断逻辑) ...
                         if effective_bw_for_decision >= new_level_actual_bitrate * (1 + self.COMP_PARAMS.get("normal_upgrade_sustain_headroom", 0.20)):
                             upgrade_approved = True
                         elif effective_buffer_for_projection_s > self.COMP_PARAMS.get("buffer_needed_for_low_headroom_upgrade", 35.0):
@@ -1530,7 +1518,6 @@ class ABRManager:
             
             # --- 正常模式降档逻辑 ---
             if next_best_index == current_level_index and current_level_index > 0 : 
-                # ... (你原有的正常模式下降级判断逻辑，可能需要微调如上一轮讨论的“只降一级”优化) ...
                 # (确保 reason_for_downgrade 和 potential_downgrade_index 被正确设置)
                 needs_downgrade = False
                 reason_for_downgrade = ""

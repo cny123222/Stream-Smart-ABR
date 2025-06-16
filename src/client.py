@@ -292,7 +292,6 @@ def schedule_network_state_broadcast(network_features_dict): # network_features_
             "is_volatile": network_features_dict.get("is_volatile", False),
             "is_sudden_drop": network_features_dict.get("is_sudden_drop", False),
             "coeff_variation": f"{network_features_dict.get('coeff_variation', 0.0):.2f}",
-            # 你可以按需添加其他特征
         }
         message = json.dumps({"type": "ABR_NETWORK_STATE_UPDATE", "data": data_to_send})
         asyncio.run_coroutine_threadsafe(broadcast_message_async(message), g_asyncio_loop_for_websocket)
@@ -542,8 +541,6 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
             # 假设 <quality_suffix_dir> 是倒数第二个路径组件 (在分片文件名前面)
             # 例如，对于 "bbb_sunflower/2160p-16000k/segment.ts", 它是 "2160p-16000k"
             # 对于 "video/2160p-16000k/seg.ts", 它是 "2160p-16000k"
-            # 你需要根据你的实际URL结构调整这里的索引。
-            # 如果你的 VIDEO_TO_STREAM_NAME 也可能变化，那么这个索引可能需要更动态地确定。
             # 假设视频名是固定的，或者路径结构是 /VIDEO_NAME/SUFFIX/segment.ts
             if len(path_segments) >= 3: # 至少需要 video_name/suffix/segment.ts
                 url_suffix_part = path_segments[-2] # 取倒数第二个作为质量目录的suffix
@@ -553,8 +550,6 @@ class DecryptionProxyHandler(http.server.BaseHTTPRequestHandler):
                     if quality_suffix_from_abr_config and quality_suffix_from_abr_config == url_suffix_part:
                         logger.debug(f"Matched TS URL '{ts_url_on_server}' to level {i} using path component '{url_suffix_part}'.") # 日志: 通过路径组件匹配到级别
                         return i
-                # 如果直接比较目录名没有成功，再尝试一次更宽松的 'in' 检查 (作为后备)
-                # 这在你之前的代码中有，但如果 suffix 是目录名，直接等于会更精确
                 for i, stream_info in enumerate(ABRManager.instance.available_streams):
                     quality_suffix_from_abr_config = stream_info.get('suffix')
                     if quality_suffix_from_abr_config and quality_suffix_from_abr_config in ts_url_on_server: # 后备检查
